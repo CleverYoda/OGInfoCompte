@@ -3,6 +3,7 @@ window.addEventListener('load', function() {
     //console.log("currentPage: "+currentPage);
     let cAdditionalData = {
          Status : ""         // Opened, Finished, Closed,
+         ,info : "e"
         ,Target : ""         // ToFindGreen, ToFindOrange ,ToFindRed ,Finding, Found, Waiting, Expired, None
         ,TargetTiming : ""   // None, 00:00 mm:ss  //document.querySelector("div.left_content p.auction_info span span").innerHTML,
         ,Item : ""           // None, Label of the item //document.querySelector("div.left_content div.image_140px img").alt,
