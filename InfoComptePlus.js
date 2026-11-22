@@ -683,11 +683,6 @@ function initializeInfoComptePlus() {
               resources: displayResources,
               resourceTotal,
               resourceTotalDisplay: formatSpyMagnitude(resourceTotal),
-              resourceDisplay: {
-                  metal: formatSpyMagnitude(displayResources.metal),
-                  crystal: formatSpyMagnitude(displayResources.crystal),
-                  deuterium: formatSpyMagnitude(displayResources.deuterium)
-              },
               forceWeight,
               forceDisplay: formatSpyForceMagnitude(forceWeight),
               counterEspionageChance: parsedCounterEspionage === null
@@ -1606,7 +1601,6 @@ if (document.readyState === "loading") {
   let messageHolderForReports = null;
   let spyReportViewElement = null;
   let spyMessagesOriginalStyles = null;
-  let activeResourcesTooltip = null;
   const SPY_REPORT_TAB_CATEGORIES = ["EnnemySpy", "Target1", "Target2", "Target3", "Target4"];
   const SPY_REPORT_SELECTED_CATEGORY_KEY = "cAdditionalSpyReportSelectedCategory";
   let selectedSpyReportCategory = "Target1";
@@ -1937,11 +1931,6 @@ if (document.readyState === "loading") {
       : null;
     if (!spyReportState || !spyReportState.visible) return;
 
-    if (activeResourcesTooltip) {
-      activeResourcesTooltip.remove();
-      activeResourcesTooltip = null;
-    }
-
     const reportSection = document.createElement("div");
     reportSection.style.cssText = "width:100%;box-sizing:border-box;padding:4px;color:#f2f2f2;font:12px Arial,sans-serif;";
     const title = document.createElement("div");
@@ -2093,7 +2082,7 @@ if (document.readyState === "loading") {
     } else {
       const reportGrid = document.createElement("div");
       reportGrid.style.cssText = "display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;width:100%;align-items:stretch;";
-      visibleRows.forEach(({ report, facts, resources, resourceTotal, resourceTotalDisplay, resourceDisplay, forceWeight, forceDisplay, counterEspionageChance, ageMinutes, ageColor, activeMission }) => {
+      visibleRows.forEach(({ report, facts, resources, resourceTotal, resourceTotalDisplay, forceWeight, forceDisplay, counterEspionageChance, ageMinutes, ageColor, activeMission }) => {
         const card = document.createElement("div");
         card.title = report.rawText || "";
         card.style.cssText = "position:relative;min-width:0;box-sizing:border-box;padding:1px 18px 1px 1px;border:1px solid #8297ab;border-radius:4px;background:linear-gradient(145deg,#202a35,#151c24);box-shadow:0 1px 3px rgba(0,0,0,.4);";
@@ -2160,11 +2149,6 @@ if (document.readyState === "loading") {
 
         const resourcesCell = document.createElement("span");
         resourcesCell.style.cssText = "display:inline-flex;flex:0 0 auto;align-items:center;gap:1px;";
-        const resourceColors = [
-          ["metal", "#d6d6d6", "Métal"],
-          ["crystal", "#51d6ff", "Cristal"],
-          ["deuterium", "#66dd66", "Deutérium"]
-        ];
         if (isEnemySpy) {
           addCoordinateLink(
             resourcesCell,
@@ -2174,55 +2158,10 @@ if (document.readyState === "loading") {
             true
           );
         } else if (resourceTotal > 0) {
-          const diskColors = ["#006400", "#ff00ff", "#00008b"];
-          const resourceValues = resourceColors.map(([key]) => Math.max(0, Number(resources[key]) || 0));
-          const metalEnd = resourceValues[0] / resourceTotal * 100;
-          const crystalEnd = (resourceValues[0] + resourceValues[1]) / resourceTotal * 100;
           const totalLabel = document.createElement("div");
           totalLabel.textContent = resourceTotalDisplay;
-          totalLabel.style.cssText = "margin-right:1px;color:#fff;font:8px Arial,sans-serif;white-space:nowrap;";
+          totalLabel.style.cssText = "color:#fff;font:8px Arial,sans-serif;white-space:nowrap;";
           resourcesCell.appendChild(totalLabel);
-
-          const resourceDisk = document.createElement("span");
-          resourceDisk.setAttribute("role", "img");
-          resourceDisk.setAttribute("aria-label", "Survoler pour afficher les ressources");
-          resourceDisk.style.cssText = `display:inline-block;width:16px;height:16px;border:1px solid #aeb9c4;border-radius:50%;background:conic-gradient(${diskColors[0]} 0 ${metalEnd}%,${diskColors[1]} ${metalEnd}% ${crystalEnd}%,${diskColors[2]} ${crystalEnd}% 100%);cursor:help;box-shadow:0 1px 2px rgba(0,0,0,.4);`;
-
-          let diskTooltip = null;
-          const positionDiskTooltip = event => {
-            if (!diskTooltip) return;
-            diskTooltip.style.left = `${Math.max(4, Math.min(event.clientX + 12, window.innerWidth - diskTooltip.offsetWidth - 4))}px`;
-            diskTooltip.style.top = `${Math.max(4, Math.min(event.clientY + 12, window.innerHeight - diskTooltip.offsetHeight - 4))}px`;
-          };
-          resourceDisk.addEventListener("mouseenter", event => {
-            if (activeResourcesTooltip) activeResourcesTooltip.remove();
-            diskTooltip = document.createElement("div");
-            diskTooltip.style.cssText = "position:fixed;z-index:1000001;padding:5px 7px;background:#171d23;border:1px solid #777;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.5);pointer-events:none;font:11px Arial,sans-serif;";
-            const tooltipTable = document.createElement("table");
-            tooltipTable.style.cssText = "border-collapse:collapse;";
-            resourceColors.forEach(([key, color, label]) => {
-              const tooltipRow = document.createElement("tr");
-              const nameCell = document.createElement("td");
-              nameCell.textContent = label;
-              nameCell.style.cssText = `padding:1px 8px 1px 0;color:${color};`;
-              const amountCell = document.createElement("td");
-              amountCell.textContent = resourceDisplay[key];
-              amountCell.style.cssText = `padding:1px 0;text-align:right;color:${color};`;
-              tooltipRow.append(nameCell, amountCell);
-              tooltipTable.appendChild(tooltipRow);
-            });
-            diskTooltip.appendChild(tooltipTable);
-            document.body.appendChild(diskTooltip);
-            activeResourcesTooltip = diskTooltip;
-            positionDiskTooltip(event);
-          });
-          resourceDisk.addEventListener("mousemove", positionDiskTooltip);
-          resourceDisk.addEventListener("mouseleave", () => {
-            if (diskTooltip) diskTooltip.remove();
-            if (activeResourcesTooltip === diskTooltip) activeResourcesTooltip = null;
-            diskTooltip = null;
-          });
-          resourcesCell.appendChild(resourceDisk);
         }
         contents.appendChild(resourcesCell);
 
@@ -2243,15 +2182,6 @@ if (document.readyState === "loading") {
         }
         contents.appendChild(forceBadge);
 
-        if (!isEnemySpy) {
-          const lootBadge = document.createElement("span");
-          const lootPercent = report.lootPercent;
-          const lootColor = lootPercent === 100 ? "#e53935" : lootPercent === 75 ? "#ff00ff" : lootPercent === 50 ? "#007bff" : "#555";
-          lootBadge.textContent = lootPercent == null ? "—" : `${lootPercent}%`;
-          lootBadge.style.cssText = `display:inline-flex;flex:0 0 auto;box-sizing:border-box;width:17px;height:17px;align-items:center;justify-content:center;border:1px solid rgba(235,242,250,.8);border-radius:50%;background:${lootColor};color:#fff;font:8px Arial,sans-serif;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 2px rgba(0,0,0,.45);`;
-          contents.appendChild(lootBadge);
-        }
-
         const ageBadge = document.createElement("span");
         ageBadge.textContent = ageMinutes === null ? "--" : ageMinutes > 60 ? ">>" : String(ageMinutes).padStart(2, "0");
         const reportIsActive = Date.parse(report.expiresAt) > Date.now();
@@ -2267,11 +2197,22 @@ if (document.readyState === "loading") {
           contents.appendChild(categoryBadge);
         }
 
+        const appendLootSuperscript = statusBadge => {
+          if (isEnemySpy || report.lootPercent == null) return;
+          statusBadge.style.position = "relative";
+          statusBadge.style.overflow = "visible";
+          const lootSuperscript = document.createElement("sup");
+          lootSuperscript.textContent = `${report.lootPercent}%`;
+          lootSuperscript.style.cssText = "position:absolute;top:-3px;right:-4px;z-index:1;padding:0 1px;border:1px solid rgba(255,255,255,.65);border-radius:3px;background:#1b2733;color:#fff;font:bold 7px/1 Arial,sans-serif;text-shadow:0 1px 2px #000;white-space:nowrap;pointer-events:none;";
+          statusBadge.appendChild(lootSuperscript);
+        };
+
         if (activeMission) {
           const activeIcon = document.createElement("span");
           activeIcon.textContent = "🚀";
           activeIcon.title = `${activeMission.missionId === "6" ? "Espionnage" : "Attaque"} en cours${activeMission.returning ? " (retour)" : " (aller)"}`;
           activeIcon.style.cssText = "display:inline-flex;flex:0 0 auto;width:17px;height:17px;align-items:center;justify-content:center;border:1px solid #63c995;border-radius:50%;background:#174c35;font-size:10px;box-shadow:0 1px 2px rgba(0,0,0,.45);";
+          appendLootSuperscript(activeIcon);
           contents.appendChild(activeIcon);
         } else {
           const waitingLink = document.createElement("a");
@@ -2279,6 +2220,7 @@ if (document.readyState === "loading") {
           waitingLink.textContent = "⏳";
           waitingLink.title = "En attente — préparer une attaque avec les vaisseaux sélectionnés";
           waitingLink.style.cssText = "display:inline-flex;flex:0 0 auto;width:17px;height:17px;align-items:center;justify-content:center;border:1px solid #d6aa4d;border-radius:50%;background:#513b12;font-size:10px;text-decoration:none;box-shadow:0 1px 2px rgba(0,0,0,.45);";
+          appendLootSuperscript(waitingLink);
           waitingLink.addEventListener("click", event => {
             event.preventDefault();
             window.location.href = getSpyReportNavigationUrl(report, "fleetdispatch", 1);
@@ -2411,10 +2353,6 @@ if (document.readyState === "loading") {
       return reportViewMounted;
     }
 
-    if (activeResourcesTooltip) {
-      activeResourcesTooltip.remove();
-      activeResourcesTooltip = null;
-    }
     if (spyReportViewElement && spyReportViewElement.parentNode === messagesContainer) {
       if (!messageHolderForReports) {
         console.error("Le conteneur messagesHolder d'origine est introuvable.");
