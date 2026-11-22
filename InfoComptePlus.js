@@ -215,6 +215,218 @@ window.addEventListener('load', function() {
 
   }
 
+  const SPY_REPORT_STORAGE_KEY = "cAdditionalSpyReports";
+  const SPY_REPORT_PANEL_ID = "cAdditionalSpyReportsPanel";
+  let spyReportPanelRefresh = null;
+
+  function getSpyReportStore() {
+      const saved = localStorage.getItem(SPY_REPORT_STORAGE_KEY);
+      if (saved == null) {
+          return { version: 1, updatedAt: null, reports: [] };
+      }
+
+      try {
+          const parsed = JSON.parse(saved);
+          if (parsed && Array.isArray(parsed.reports)) {
+              return parsed;
+          }
+          throw new Error("Le format de la liste des rapports est invalide.");
+      } catch (error) {
+          console.error("Impossible de lire les rapports d'espionnage sauvegardés.", error);
+          showNotification("La liste des rapports d'espionnage est invalide.","error","Spy reports");
+          return null;
+      }
+  }
+
+  function getSpyNumber(value) {
+      const digits = String(value).replace(/[^\d]/g, "");
+      return digits ? parseInt(digits, 10) : null;
+  }
+
+  function getSpyResource(text, labels) {
+      const labelPattern = "(?:" + labels.join("|") + ")";
+      const numberPattern = "([\\d]+(?:[\\s.,][\\d]{3})*)";
+      let match = new RegExp(labelPattern + "[^\\d]{0,30}" + numberPattern, "i").exec(text);
+      if (!match) {
+          match = new RegExp(numberPattern + "\\s*" + labelPattern, "i").exec(text);
+      }
+      return match ? getSpyNumber(match[1]) : null;
+  }
+
+  function getSpyReportAttributes(element) {
+      const attributes = {};
+      Array.from(element.attributes).forEach(attribute => {
+          attributes[attribute.name] = attribute.value;
+      });
+      return attributes;
+  }
+
+  function scanSpyReports() {
+      if (currentPage !== "messages") return;
+
+      const store = getSpyReportStore();
+      if (store == null) return;
+
+      const now = new Date();
+      const nowMs = now.getTime();
+      let added = 0;
+      let updated = 0;
+      const messages = document.querySelectorAll("div.messagesHolder div.msg");
+
+      messages.forEach((message, index) => {
+          const rawText = (message.innerText || message.textContent || "").trim();
+          const attributeValues = [message.outerHTML];
+          [message, ...message.querySelectorAll("*")].forEach(element => {
+              Array.from(element.attributes).forEach(attribute => attributeValues.push(attribute.value));
+          });
+          const searchableText = rawText + " " + attributeValues.join(" ");
+          const coordinateMatch = searchableText.match(/\[?(\d{1,2})\s*:\s*(\d{1,3})\s*:\s*(\d{1,2})\]?/);
+          const coordinates = coordinateMatch
+              ? `${coordinateMatch[1]}:${coordinateMatch[2]}:${coordinateMatch[3]}`
+              : "";
+          const locationType = /\b(moon|lune)\b/i.test(searchableText) ? "moon" : "planet";
+          const messageId = message.getAttribute("data-msg-id") || String(index + 1);
+          const key = coordinates ? `coords:${coordinates}:${locationType}` : `message:${messageId}`;
+          const resources = {
+              metal: getSpyResource(rawText, ["metal", "m[eé]tal"]),
+              crystal: getSpyResource(rawText, ["crystal", "cristal"]),
+              deuterium: getSpyResource(rawText, ["deuterium", "deut[eé]rium", "deut"])
+          };
+          const isSpyReport = /espionage|espionnage|spy report|rapport d['’ ]espionnage/i.test(searchableText)
+              || Object.values(resources).some(value => value !== null);
+          if (!coordinates || !isSpyReport) return;
+
+          const lootMatch = searchableText.match(/(?:loot|plunder|butin|pillage)[^\n%]{0,60}\b(50|75|100)\s*%/i)
+              || searchableText.match(/\b(50|75|100)\s*%/);
+          const lootPercent = lootMatch ? parseInt(lootMatch[1], 10) : null;
+          const reportTimeElement = message.querySelector("time[datetime]");
+          const reportTimeValue = (reportTimeElement && reportTimeElement.getAttribute("datetime"))
+              || message.getAttribute("data-date")
+              || message.getAttribute("data-timestamp");
+          const reportTimeMs = reportTimeValue ? Date.parse(reportTimeValue) : NaN;
+          const reportedAt = isNaN(reportTimeMs) ? null : new Date(reportTimeMs).toISOString();
+          const existingIndex = store.reports.findIndex(report => report.key === key);
+          const existingReport = existingIndex === -1 ? null : store.reports[existingIndex];
+          let expiresAt = new Date((reportedAt ? reportTimeMs : nowMs) + 60 * 60 * 1000).toISOString();
+          if (!reportedAt && existingReport && existingReport.rawText === rawText && existingReport.expiresAt) {
+              expiresAt = existingReport.expiresAt;
+          }
+          const reportData = {
+              key,
+              messageId,
+              coordinates: coordinates || null,
+              locationType,
+              resources,
+              lootPercent,
+              loot: lootPercent === null
+                  ? null
+                  : {
+                      metal: resources.metal === null ? null : Math.floor(resources.metal * lootPercent / 100),
+                      crystal: resources.crystal === null ? null : Math.floor(resources.crystal * lootPercent / 100),
+                      deuterium: resources.deuterium === null ? null : Math.floor(resources.deuterium * lootPercent / 100)
+                  },
+              scannedAt: now.toISOString(),
+                  reportedAt,
+                  expiresAt,
+              rawText,
+              rawHtml: message.innerHTML,
+              attributes: getSpyReportAttributes(message)
+          };
+
+          if (existingIndex === -1) {
+              store.reports.push(reportData);
+              added++;
+          } else {
+              store.reports[existingIndex] = reportData;
+              updated++;
+          }
+      });
+
+      store.updatedAt = now.toISOString();
+      try {
+          localStorage.setItem(SPY_REPORT_STORAGE_KEY, JSON.stringify(store));
+      } catch (error) {
+          console.error("Impossible de sauvegarder les rapports d'espionnage.", error);
+          showNotification("Impossible de sauvegarder les rapports d'espionnage dans localStorage.","error","Spy reports");
+          return;
+      }
+
+      showNotification(`${added} nouveau(x) rapport(s), ${updated} actualisé(s).`,"info","Spy reports");
+      const panel = document.getElementById(SPY_REPORT_PANEL_ID);
+      if (panel) renderSpyReportList(panel);
+  }
+
+  function renderSpyReportList(panel) {
+      const store = getSpyReportStore();
+      if (store == null) return;
+
+      const list = panel.querySelector(".cSpyReportList");
+      if (!list) return;
+      while (list.firstChild) list.removeChild(list.firstChild);
+
+      const reports = store.reports.slice().sort((a, b) =>
+          String(a.coordinates || a.messageId).localeCompare(String(b.coordinates || b.messageId))
+      );
+
+      if (reports.length === 0) {
+          const empty = document.createElement("div");
+          empty.textContent = "Aucun rapport enregistré. Appuyez sur N pour scanner.";
+          list.appendChild(empty);
+          return;
+      }
+
+      reports.forEach(report => {
+          const resources = report.loot || report.resources || {};
+          const active = Date.parse(report.expiresAt) > Date.now();
+          const row = document.createElement("div");
+          row.style.cssText = "padding:4px 0;border-bottom:1px solid #444;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+          row.textContent = `[${report.coordinates || "?:???:??"}] ${resources.metal ?? "?"}/${resources.crystal ?? "?"}/${resources.deuterium ?? "?"} ${report.lootPercent ?? "?"}% ${active ? "on" : "off"}`;
+          row.title = report.rawText || "";
+          list.appendChild(row);
+      });
+  }
+
+  function toggleSpyReportList() {
+      if (currentPage !== "messages") return;
+
+      let panel = document.getElementById(SPY_REPORT_PANEL_ID);
+      if (panel) {
+          panel.remove();
+          clearInterval(spyReportPanelRefresh);
+          spyReportPanelRefresh = null;
+          return;
+      }
+
+      panel = document.createElement("div");
+      panel.id = SPY_REPORT_PANEL_ID;
+      panel.style.cssText = "position:fixed;top:110px;left:10px;z-index:999998;width:240px;max-height:65vh;overflow:auto;box-sizing:border-box;padding:8px;background:#171d23;color:#fff;border:1px solid #555;border-radius:5px;font:12px Arial,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.5);";
+
+      const header = document.createElement("div");
+      header.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-weight:bold;";
+      const title = document.createElement("span");
+      title.textContent = "Rapports d'espionnage";
+      const close = document.createElement("button");
+      close.type = "button";
+      close.textContent = "×";
+      close.title = "Fermer";
+      close.style.cssText = "cursor:pointer;background:transparent;color:#fff;border:0;font-size:18px;";
+      close.addEventListener("click", () => {
+          panel.remove();
+          clearInterval(spyReportPanelRefresh);
+          spyReportPanelRefresh = null;
+      });
+      header.append(title, close);
+
+      const list = document.createElement("div");
+      list.className = "cSpyReportList";
+      panel.append(header, list);
+      document.body.appendChild(panel);
+      renderSpyReportList(panel);
+      spyReportPanelRefresh = setInterval(() => {
+          if (document.getElementById(SPY_REPORT_PANEL_ID)) renderSpyReportList(panel);
+      }, 60000);
+  }
+
   document.onkeydown = function(e) {
         if (e.ctrlKey || e.altKey || e.metaKey) return;
         var char = e.which;
@@ -553,10 +765,14 @@ window.addEventListener('load', function() {
             case 77: //m
                 break;
             case 84: //t
+                if (currentPage=="messages")
+                    toggleSpyReportList();
                 break;
             case 70: //f
                 break;
             case 78: //n
+                if (currentPage=="messages")
+                    scanSpyReports();
                 break;
             case 86: //v
                 break;
