@@ -2202,8 +2202,8 @@ if (document.readyState === "loading") {
           statusBadge.style.position = "relative";
           statusBadge.style.overflow = "visible";
           const lootSuperscript = document.createElement("sup");
-          lootSuperscript.textContent = `${report.lootPercent}%`;
-          lootSuperscript.style.cssText = "position:absolute;top:-3px;right:-4px;z-index:1;padding:0 1px;border:1px solid rgba(255,255,255,.65);border-radius:3px;background:#1b2733;color:#fff;font:bold 7px/1 Arial,sans-serif;text-shadow:0 1px 2px #000;white-space:nowrap;pointer-events:none;";
+          lootSuperscript.textContent = String(report.lootPercent);
+          lootSuperscript.style.cssText = "position:absolute;top:-2px;right:-2px;z-index:1;padding:0 1px;border:1px solid rgba(255,255,255,.65);border-radius:3px;background:#1b2733;color:#fff;font:bold 6px/1 Arial,sans-serif;text-shadow:0 1px 2px #000;white-space:nowrap;pointer-events:none;";
           statusBadge.appendChild(lootSuperscript);
         };
 
