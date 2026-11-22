@@ -270,10 +270,10 @@ function initializeInfoComptePlus() {
   }
 
   function scanSpyReports() {
-      if (currentPage !== "messages") return;
+      if (currentPage !== "messages") return null;
 
       const store = getSpyReportStore();
-      if (store == null) return;
+      if (store == null) return null;
 
       const now = new Date();
       const nowMs = now.getTime();
@@ -368,12 +368,26 @@ function initializeInfoComptePlus() {
       } catch (error) {
           console.error("Impossible de sauvegarder les rapports d'espionnage.", error);
           showNotification("Impossible de sauvegarder les rapports d'espionnage dans localStorage.","error","Spy reports");
-          return;
+          return null;
       }
 
       showNotification(`${added} nouveau(x) rapport(s), ${updated} actualisé(s).`,"info","Spy reports");
       const panel = document.getElementById(SPY_REPORT_PANEL_ID);
       if (panel) renderSpyReportList(panel);
+      return store;
+  }
+
+  function getSpyReportDisplayRows(store) {
+      return store.reports.slice().sort((a, b) =>
+          String(a.coordinates || a.messageId).localeCompare(String(b.coordinates || b.messageId))
+      ).map(report => {
+          const resources = report.loot || report.resources || {};
+          const active = Date.parse(report.expiresAt) > Date.now();
+          return {
+              report,
+              text: `[${report.coordinates || "?:???:??"}] ${resources.metal ?? "?"}/${resources.crystal ?? "?"}/${resources.deuterium ?? "?"} ${report.lootPercent ?? "?"}% ${active ? "on" : "off"}`
+          };
+      });
   }
 
   function renderSpyReportList(panel) {
@@ -384,23 +398,19 @@ function initializeInfoComptePlus() {
       if (!list) return;
       while (list.firstChild) list.removeChild(list.firstChild);
 
-      const reports = store.reports.slice().sort((a, b) =>
-          String(a.coordinates || a.messageId).localeCompare(String(b.coordinates || b.messageId))
-      );
+      const rows = getSpyReportDisplayRows(store);
 
-      if (reports.length === 0) {
+      if (rows.length === 0) {
           const empty = document.createElement("div");
           empty.textContent = "Aucun rapport enregistré. Appuyez sur N pour scanner.";
           list.appendChild(empty);
           return;
       }
 
-      reports.forEach(report => {
-          const resources = report.loot || report.resources || {};
-          const active = Date.parse(report.expiresAt) > Date.now();
+      rows.forEach(({ report, text }) => {
           const row = document.createElement("div");
           row.style.cssText = "padding:4px 0;border-bottom:1px solid #444;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
-          row.textContent = `[${report.coordinates || "?:???:??"}] ${resources.metal ?? "?"}/${resources.crystal ?? "?"}/${resources.deuterium ?? "?"} ${report.lootPercent ?? "?"}% ${active ? "on" : "off"}`;
+          row.textContent = text;
           row.title = report.rawText || "";
           list.appendChild(row);
       });
@@ -788,14 +798,31 @@ function initializeInfoComptePlus() {
             case 77: //m
                 break;
             case 84: //t
-                if (currentPage=="messages")
+                console.log("[InfoComptePlus] T appuyé; currentPage =", currentPage);
+                if (currentPage=="messages") {
+                    const store = getSpyReportStore();
+                    if (store) {
+                        const rows = getSpyReportDisplayRows(store).map(row => row.text);
+                        console.log("[InfoComptePlus] Affichage du panneau T :\n" + (rows.length ? rows.join("\n") : "Aucun rapport enregistré."));
+                    }
                     toggleSpyReportList();
+                } else {
+                    console.warn("[InfoComptePlus] T ignoré : la page courante n'est pas 'messages'.");
+                }
                 break;
             case 70: //f
                 break;
             case 78: //n
-                if (currentPage=="messages")
-                    scanSpyReports();
+                console.log("[InfoComptePlus] N appuyé; currentPage =", currentPage);
+                if (currentPage=="messages") {
+                    const store = scanSpyReports();
+                    if (store) {
+                        console.log("[InfoComptePlus] Objet JSON cAdditionalSpyReports :", store);
+                        console.log(JSON.stringify(store, null, 2));
+                    }
+                } else {
+                    console.warn("[InfoComptePlus] N ignoré : la page courante n'est pas 'messages'.");
+                }
                 break;
             case 86: //v
                 break;
