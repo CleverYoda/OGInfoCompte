@@ -610,10 +610,16 @@ function initializeInfoComptePlus() {
           const ageMinutes = isNaN(reportTime) ? null : Math.max(0, Math.floor((Date.now() - reportTime) / 60000));
           const activeMission = activeMissions.get(report.coordinates);
           const displayResources = report.loot || report.resources || {};
+          const resourceTotal = ["metal", "crystal", "deuterium"].reduce(
+              (total, key) => total + (Number(displayResources[key]) || 0),
+              0
+          );
           return {
               report,
               facts,
               resources: displayResources,
+              resourceTotal,
+              resourceTotalDisplay: formatSpyMagnitude(resourceTotal),
               resourceDisplay: {
                   metal: formatSpyMagnitude(displayResources.metal),
                   crystal: formatSpyMagnitude(displayResources.crystal),
@@ -1399,6 +1405,17 @@ if (document.readyState === "loading") {
   let lastFleetRefresh = null;
   let cachedSpyReportList = null;
   let activeResourcesTooltip = null;
+  const SPY_REPORT_TAB_CATEGORIES = ["EnnemySpy", "Target1", "Target2", "Target3", "Target4"];
+  const SPY_REPORT_SELECTED_CATEGORY_KEY = "cAdditionalSpyReportSelectedCategory";
+  let selectedSpyReportCategory = "Target1";
+  try {
+    const savedCategory = localStorage.getItem(SPY_REPORT_SELECTED_CATEGORY_KEY);
+    if (SPY_REPORT_TAB_CATEGORIES.includes(savedCategory)) {
+      selectedSpyReportCategory = savedCategory;
+    }
+  } catch (error) {
+    console.error("Impossible de lire l'onglet de rapports mémorisé.", error);
+  }
 
   // Création du panneau
   const panel = document.createElement("div");
@@ -1735,11 +1752,49 @@ if (document.readyState === "loading") {
     title.style.cssText = "margin-top:5px;padding-top:4px;border-top:1px solid #444;font-weight:bold;";
     reportSection.appendChild(title);
 
+    const categoryCounts = {};
+    SPY_REPORT_TAB_CATEGORIES.forEach(category => {
+      categoryCounts[category] = 0;
+    });
+    spyReportState.rows.forEach(({ report }) => {
+      if (Object.prototype.hasOwnProperty.call(categoryCounts, report.category)) {
+        categoryCounts[report.category]++;
+      }
+    });
+
+    const tabs = document.createElement("div");
+    tabs.style.cssText = "display:flex;gap:2px;margin-top:4px;width:100%;";
+    SPY_REPORT_TAB_CATEGORIES.forEach(category => {
+      const tab = document.createElement("button");
+      tab.type = "button";
+      tab.setAttribute("aria-pressed", String(selectedSpyReportCategory === category));
+      tab.style.cssText = `position:relative;flex:1;min-width:0;padding:4px 1px 3px;border:1px solid ${selectedSpyReportCategory === category ? "#8ab4f8" : "#555"};border-radius:3px;background:${selectedSpyReportCategory === category ? "#34465d" : "#252a30"};color:#fff;font:9px Arial,sans-serif;white-space:nowrap;cursor:pointer;`;
+      const label = document.createElement("span");
+      label.textContent = category;
+      const count = document.createElement("sup");
+      count.textContent = String(categoryCounts[category]);
+      count.style.cssText = "position:absolute;top:-5px;right:1px;font:8px Arial,sans-serif;color:#ffd54f;";
+      tab.append(label, count);
+      tab.addEventListener("click", () => {
+        selectedSpyReportCategory = category;
+        try {
+          localStorage.setItem(SPY_REPORT_SELECTED_CATEGORY_KEY, category);
+        } catch (error) {
+          console.error("Impossible de mémoriser l'onglet de rapports sélectionné.", error);
+          showNotification("Impossible de mémoriser l'onglet sélectionné.","error","Spy reports");
+        }
+        renderSpyReportList();
+      });
+      tabs.appendChild(tab);
+    });
+    reportSection.appendChild(tabs);
+
     const reportList = document.createElement("div");
     reportList.style.cssText = "max-height:45vh;overflow:auto;margin-top:4px;width:100%;";
-    if (spyReportState.rows.length === 0) {
+    const visibleRows = spyReportState.rows.filter(({ report }) => report.category === selectedSpyReportCategory);
+    if (visibleRows.length === 0) {
       const empty = document.createElement("div");
-      empty.textContent = "Aucun rapport enregistré. Appuyez sur N pour scanner.";
+      empty.textContent = `Aucun rapport dans ${selectedSpyReportCategory}. Appuyez sur N pour scanner.`;
       reportList.appendChild(empty);
     } else {
       const table = document.createElement("table");
@@ -1753,7 +1808,7 @@ if (document.readyState === "loading") {
       table.appendChild(columns);
 
       const body = document.createElement("tbody");
-      spyReportState.rows.forEach(({ report, facts, resources, resourceDisplay, fleetDisplay, defenseDisplay, ageMinutes, ageColor, activeMission }) => {
+      visibleRows.forEach(({ report, facts, resources, resourceTotal, resourceTotalDisplay, resourceDisplay, fleetDisplay, defenseDisplay, ageMinutes, ageColor, activeMission }) => {
         const row = document.createElement("tr");
         row.title = report.rawText || "";
         row.style.borderBottom = "1px solid #444";
@@ -1776,11 +1831,6 @@ if (document.readyState === "loading") {
           moonIcon.className = "planetIcon moon";
           moonIcon.style.cssText = "display:inline-block;width:16px;height:16px;margin:0 0 0 2px;vertical-align:middle;";
           coordinatesLink.appendChild(moonIcon);
-        } else {
-          const planetIcon = document.createElement("div");
-          planetIcon.className = "ogl-planet";
-          planetIcon.style.cssText = "display:inline-block;width:16px;height:16px;margin:0 0 0 2px;vertical-align:middle;";
-          coordinatesLink.appendChild(planetIcon);
         }
         coordinatesLink.addEventListener("click", () => {
           try {
@@ -1797,50 +1847,57 @@ if (document.readyState === "loading") {
           ["crystal", "#51d6ff", "Cristal"],
           ["deuterium", "#66dd66", "Deutérium"]
         ];
-        const resourceValues = resourceColors.map(([key]) => Math.max(0, Number(resources[key]) || 0));
-        const resourceTotal = resourceValues.reduce((sum, value) => sum + value, 0);
-        const metalEnd = resourceTotal > 0 ? resourceValues[0] / resourceTotal * 100 : 33.333;
-        const crystalEnd = resourceTotal > 0 ? (resourceValues[0] + resourceValues[1]) / resourceTotal * 100 : 66.667;
-        const resourceDisk = document.createElement("span");
-        resourceDisk.setAttribute("role", "img");
-        resourceDisk.setAttribute("aria-label", "Survoler pour afficher les ressources");
-        resourceDisk.style.cssText = `display:inline-block;width:24px;height:24px;border:1px solid #bbb;border-radius:50%;background:conic-gradient(#d6d6d6 0 ${metalEnd}%,#51d6ff ${metalEnd}% ${crystalEnd}%,#66dd66 ${crystalEnd}% 100%);cursor:help;`;
+        if (resourceTotal > 0) {
+          const diskColors = ["#006400", "#ff00ff", "#00008b"];
+          const resourceValues = resourceColors.map(([key]) => Math.max(0, Number(resources[key]) || 0));
+          const metalEnd = resourceValues[0] / resourceTotal * 100;
+          const crystalEnd = (resourceValues[0] + resourceValues[1]) / resourceTotal * 100;
+          const totalLabel = document.createElement("div");
+          totalLabel.textContent = resourceTotalDisplay;
+          totalLabel.style.cssText = "margin-bottom:1px;color:#fff;font:inherit;white-space:nowrap;";
+          resourcesCell.appendChild(totalLabel);
 
-        let diskTooltip = null;
-        const positionDiskTooltip = event => {
-          if (!diskTooltip) return;
-          diskTooltip.style.left = `${Math.max(4, Math.min(event.clientX + 12, window.innerWidth - diskTooltip.offsetWidth - 4))}px`;
-          diskTooltip.style.top = `${Math.max(4, Math.min(event.clientY + 12, window.innerHeight - diskTooltip.offsetHeight - 4))}px`;
-        };
-        resourceDisk.addEventListener("mouseenter", event => {
-          if (activeResourcesTooltip) activeResourcesTooltip.remove();
-          diskTooltip = document.createElement("div");
-          diskTooltip.style.cssText = "position:fixed;z-index:1000001;padding:5px 7px;background:#171d23;border:1px solid #777;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.5);pointer-events:none;font:11px Arial,sans-serif;";
-          const tooltipTable = document.createElement("table");
-          tooltipTable.style.cssText = "border-collapse:collapse;";
-          resourceColors.forEach(([key, color, label]) => {
-            const tooltipRow = document.createElement("tr");
-            const nameCell = document.createElement("td");
-            nameCell.textContent = label;
-            nameCell.style.cssText = `padding:1px 8px 1px 0;color:${color};`;
-            const amountCell = document.createElement("td");
-            amountCell.textContent = resourceDisplay[key];
-            amountCell.style.cssText = `padding:1px 0;text-align:right;color:${color};`;
-            tooltipRow.append(nameCell, amountCell);
-            tooltipTable.appendChild(tooltipRow);
+          const resourceDisk = document.createElement("span");
+          resourceDisk.setAttribute("role", "img");
+          resourceDisk.setAttribute("aria-label", "Survoler pour afficher les ressources");
+          resourceDisk.style.cssText = `display:inline-block;width:24px;height:24px;border:1px solid #bbb;border-radius:50%;background:conic-gradient(${diskColors[0]} 0 ${metalEnd}%,${diskColors[1]} ${metalEnd}% ${crystalEnd}%,${diskColors[2]} ${crystalEnd}% 100%);cursor:help;`;
+
+          let diskTooltip = null;
+          const positionDiskTooltip = event => {
+            if (!diskTooltip) return;
+            diskTooltip.style.left = `${Math.max(4, Math.min(event.clientX + 12, window.innerWidth - diskTooltip.offsetWidth - 4))}px`;
+            diskTooltip.style.top = `${Math.max(4, Math.min(event.clientY + 12, window.innerHeight - diskTooltip.offsetHeight - 4))}px`;
+          };
+          resourceDisk.addEventListener("mouseenter", event => {
+            if (activeResourcesTooltip) activeResourcesTooltip.remove();
+            diskTooltip = document.createElement("div");
+            diskTooltip.style.cssText = "position:fixed;z-index:1000001;padding:5px 7px;background:#171d23;border:1px solid #777;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.5);pointer-events:none;font:11px Arial,sans-serif;";
+            const tooltipTable = document.createElement("table");
+            tooltipTable.style.cssText = "border-collapse:collapse;";
+            resourceColors.forEach(([key, color, label]) => {
+              const tooltipRow = document.createElement("tr");
+              const nameCell = document.createElement("td");
+              nameCell.textContent = label;
+              nameCell.style.cssText = `padding:1px 8px 1px 0;color:${color};`;
+              const amountCell = document.createElement("td");
+              amountCell.textContent = resourceDisplay[key];
+              amountCell.style.cssText = `padding:1px 0;text-align:right;color:${color};`;
+              tooltipRow.append(nameCell, amountCell);
+              tooltipTable.appendChild(tooltipRow);
+            });
+            diskTooltip.appendChild(tooltipTable);
+            document.body.appendChild(diskTooltip);
+            activeResourcesTooltip = diskTooltip;
+            positionDiskTooltip(event);
           });
-          diskTooltip.appendChild(tooltipTable);
-          document.body.appendChild(diskTooltip);
-          activeResourcesTooltip = diskTooltip;
-          positionDiskTooltip(event);
-        });
-        resourceDisk.addEventListener("mousemove", positionDiskTooltip);
-        resourceDisk.addEventListener("mouseleave", () => {
-          if (diskTooltip) diskTooltip.remove();
-          if (activeResourcesTooltip === diskTooltip) activeResourcesTooltip = null;
-          diskTooltip = null;
-        });
-        resourcesCell.appendChild(resourceDisk);
+          resourceDisk.addEventListener("mousemove", positionDiskTooltip);
+          resourceDisk.addEventListener("mouseleave", () => {
+            if (diskTooltip) diskTooltip.remove();
+            if (activeResourcesTooltip === diskTooltip) activeResourcesTooltip = null;
+            diskTooltip = null;
+          });
+          resourcesCell.appendChild(resourceDisk);
+        }
 
         const fleetCell = addCell();
         fleetCell.textContent = fleetDisplay;
@@ -1932,8 +1989,12 @@ if (document.readyState === "loading") {
       reportList.appendChild(table);
     }
     reportSection.appendChild(reportList);
+    if (cachedSpyReportList && cachedSpyReportList.parentNode) {
+      cachedSpyReportList.parentNode.replaceChild(reportSection, cachedSpyReportList);
+    } else {
+      fleetDetails.appendChild(reportSection);
+    }
     cachedSpyReportList = reportSection;
-    fleetDetails.appendChild(cachedSpyReportList);
   }
 
   // Actualisation de la partie flotte
