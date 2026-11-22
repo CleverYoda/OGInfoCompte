@@ -1,5 +1,5 @@
 
-window.addEventListener('load', function() {
+function initializeInfoComptePlus() {
     //console.log("currentPage: "+currentPage);
     let cAdditionalData = {
          Status : ""         // Opened, Finished, Closed,
@@ -261,6 +261,14 @@ window.addEventListener('load', function() {
       return attributes;
   }
 
+  function getSpyReportTimestamp(value) {
+      if (!value) return null;
+      if (/^\d{10}$/.test(value)) return new Date(parseInt(value, 10) * 1000);
+      if (/^\d{13}$/.test(value)) return new Date(parseInt(value, 10));
+      const timestamp = Date.parse(value);
+      return isNaN(timestamp) ? null : new Date(timestamp);
+  }
+
   function scanSpyReports() {
       if (currentPage !== "messages") return;
 
@@ -275,36 +283,47 @@ window.addEventListener('load', function() {
 
       messages.forEach((message, index) => {
           const rawText = (message.innerText || message.textContent || "").trim();
+          const rawDataElement = message.querySelector(".rawMessageData");
+          const rawData = rawDataElement ? getSpyReportAttributes(rawDataElement) : {};
           const attributeValues = [message.outerHTML];
           [message, ...message.querySelectorAll("*")].forEach(element => {
               Array.from(element.attributes).forEach(attribute => attributeValues.push(attribute.value));
           });
           const searchableText = rawText + " " + attributeValues.join(" ");
+          const filteredCoordinates = message.getAttribute("data-messages-filters-coordinates");
+          const rawCoordinates = rawData["data-raw-coordinates"];
           const coordinateMatch = searchableText.match(/\[?(\d{1,2})\s*:\s*(\d{1,3})\s*:\s*(\d{1,2})\]?/);
           const coordinates = coordinateMatch
-              ? `${coordinateMatch[1]}:${coordinateMatch[2]}:${coordinateMatch[3]}`
-              : "";
-          const locationType = /\b(moon|lune)\b/i.test(searchableText) ? "moon" : "planet";
+              ? (rawCoordinates || (filteredCoordinates && filteredCoordinates.replace(/[\[\]]/g, "")) || `${coordinateMatch[1]}:${coordinateMatch[2]}:${coordinateMatch[3]}`)
+              : (rawCoordinates || (filteredCoordinates && filteredCoordinates.replace(/[\[\]]/g, "")) || "");
+          const planetType = rawData["data-raw-targetplanettype"];
+          const locationType = planetType === "3" || /\b(moon|lune)\b/i.test(rawText) ? "moon" : "planet";
           const messageId = message.getAttribute("data-msg-id") || String(index + 1);
           const key = coordinates ? `coords:${coordinates}:${locationType}` : `message:${messageId}`;
           const resources = {
-              metal: getSpyResource(rawText, ["metal", "m[eé]tal"]),
-              crystal: getSpyResource(rawText, ["crystal", "cristal"]),
-              deuterium: getSpyResource(rawText, ["deuterium", "deut[eé]rium", "deut"])
+              metal: getSpyNumber(rawData["data-raw-metal"]) ?? getSpyResource(rawText, ["metal", "m[eé]tal"]),
+              crystal: getSpyNumber(rawData["data-raw-crystal"]) ?? getSpyResource(rawText, ["crystal", "cristal"]),
+              deuterium: getSpyNumber(rawData["data-raw-deuterium"]) ?? getSpyResource(rawText, ["deuterium", "deut[eé]rium", "deut"])
           };
-          const isSpyReport = /espionage|espionnage|spy report|rapport d['’ ]espionnage/i.test(searchableText)
-              || Object.values(resources).some(value => value !== null);
+          const rawLoot = rawData["data-raw-loot"];
+          const rawLootPercent = /^\d+$/.test(rawLoot || "") ? parseInt(rawLoot, 10) : null;
+          const isSpyReport = (rawDataElement && [50, 75, 100].includes(rawLootPercent))
+              || /espionage|espionnage|spy report|rapport d['’ ]espionnage/i.test(searchableText);
           if (!coordinates || !isSpyReport) return;
 
           const lootMatch = searchableText.match(/(?:loot|plunder|butin|pillage)[^\n%]{0,60}\b(50|75|100)\s*%/i)
               || searchableText.match(/\b(50|75|100)\s*%/);
-          const lootPercent = lootMatch ? parseInt(lootMatch[1], 10) : null;
+          const lootPercent = [50, 75, 100].includes(rawLootPercent)
+              ? rawLootPercent
+              : (lootMatch ? parseInt(lootMatch[1], 10) : null);
           const reportTimeElement = message.querySelector("time[datetime]");
           const reportTimeValue = (reportTimeElement && reportTimeElement.getAttribute("datetime"))
+              || rawData["data-raw-timestamp"]
               || message.getAttribute("data-date")
               || message.getAttribute("data-timestamp");
-          const reportTimeMs = reportTimeValue ? Date.parse(reportTimeValue) : NaN;
-          const reportedAt = isNaN(reportTimeMs) ? null : new Date(reportTimeMs).toISOString();
+          const reportDate = getSpyReportTimestamp(reportTimeValue);
+          const reportTimeMs = reportDate ? reportDate.getTime() : NaN;
+          const reportedAt = reportDate ? reportDate.toISOString() : null;
           const existingIndex = store.reports.findIndex(report => report.key === key);
           const existingReport = existingIndex === -1 ? null : store.reports[existingIndex];
           let expiresAt = new Date((reportedAt ? reportTimeMs : nowMs) + 60 * 60 * 1000).toISOString();
@@ -330,7 +349,8 @@ window.addEventListener('load', function() {
                   expiresAt,
               rawText,
               rawHtml: message.innerHTML,
-              attributes: getSpyReportAttributes(message)
+              attributes: getSpyReportAttributes(message),
+              rawData
           };
 
           if (existingIndex === -1) {
@@ -427,9 +447,12 @@ window.addEventListener('load', function() {
       }, 60000);
   }
 
-  document.onkeydown = function(e) {
+  if (!window.infoComptePlusKeyboardInstalled) {
+    window.infoComptePlusKeyboardInstalled = true;
+    window.addEventListener("keydown", function(e) {
         if (e.ctrlKey || e.altKey || e.metaKey) return;
-        var char = e.which;
+        if (e.repeat) return;
+        var char = e.which || e.keyCode;
         if (!char) return;
         switch (char) {
             case 46: // Delete
@@ -1127,10 +1150,17 @@ window.addEventListener('load', function() {
             default: break;
         }
         return;
-    };
+    }, true);
+  }
     // Call creating additional content
     //CreateAdditionalContent();
-});
+}
+
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initializeInfoComptePlus, { once: true });
+} else {
+    initializeInfoComptePlus();
+}
 
 
 
