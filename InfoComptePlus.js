@@ -371,7 +371,7 @@ function initializeInfoComptePlus() {
       }
 
       showNotification(`${added} nouveau(x) rapport(s), ${updated} actualisé(s).`,"info","Spy reports");
-      if (spyReportsVisible) refreshFleetDisplay();
+      if (spyReportsVisible) refreshFleetDisplay(true);
       return store;
   }
 
@@ -390,8 +390,9 @@ function initializeInfoComptePlus() {
 
   function toggleSpyReportList() {
       if (currentPage !== "messages") return;
-      spyReportsVisible = !spyReportsVisible;
-      refreshFleetDisplay();
+      spyReportsVisible = true;
+      detailsVisible = true;
+      refreshFleetDisplay(true);
   }
 
   window.getInfoComptePlusSpyReportState = function() {
@@ -1412,9 +1413,9 @@ if (document.readyState === "loading") {
   }
 
   // Actualisation de la partie flotte
-  function refreshFleetDisplay() {
+  function refreshFleetDisplay(force = false) {
     // Actualisation uniquement en mode OK
-    if (!enabled || pending > 0) return;
+    if ((!enabled || pending > 0) && !force) return;
 
     // Capture l'heure de cette actualisation
     lastFleetRefresh = new Date();
