@@ -237,6 +237,14 @@ function initializeInfoComptePlus() {
       }
   }
 
+  function logSpyReportStorage(source) {
+      const store = getSpyReportStore();
+      if (store == null) return null;
+      console.log(`[InfoComptePlus][${source}] localStorage key="${SPY_REPORT_STORAGE_KEY}", messages=${store.reports.length}`);
+      console.log(store);
+      return store;
+  }
+
   function getSpyNumber(value) {
       const digits = String(value).replace(/[^\d]/g, "");
       return digits ? parseInt(digits, 10) : null;
@@ -744,14 +752,18 @@ function initializeInfoComptePlus() {
             case 77: //m
                 break;
             case 84: //t
-                if (currentPage=="messages")
+                if (currentPage=="messages") {
+                    logSpyReportStorage("T");
                     toggleSpyReportList();
+                }
                 break;
             case 70: //f
                 break;
             case 78: //n
-                if (currentPage=="messages")
+                if (currentPage=="messages") {
                     scanSpyReports();
+                    logSpyReportStorage("N");
+                }
                 break;
             case 86: //v
                 break;
