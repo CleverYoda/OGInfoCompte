@@ -1978,7 +1978,7 @@ if (document.readyState === "loading") {
           const targetType = Number(report.targetPlanetType || (report.locationType === "moon" ? 3 : 1));
           spyLink.setAttribute(
             "onclick",
-            `sendShipsWithPopup(6,${coordinates[1]},${coordinates[2]},${coordinates[3]},${targetType},0); return false;`
+            `sendShipsWithPopup(6,${coordinates[1]},${coordinates[2]},${coordinates[3]},${targetType},100); return false;`
           );
         }
         spyCell.appendChild(spyLink);
