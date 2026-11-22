@@ -561,6 +561,14 @@ function initializeInfoComptePlus() {
       return `${(amount / 1000000).toFixed(2)}M`;
   }
 
+  function formatSpyForceMagnitude(value) {
+      if (value == null || !Number.isFinite(Number(value))) return "--";
+      const amount = Number(value);
+      if (amount === 0) return "0";
+      if (amount > 0 && amount < 1000000) return `${(amount / 1000).toFixed(2)}k`;
+      return formatSpyMagnitude(amount);
+  }
+
   function getSpyReportAgeColor(ageMinutes) {
       if (ageMinutes === null) return "#777";
       if (ageMinutes <= 15) return "#006400";
@@ -614,6 +622,7 @@ function initializeInfoComptePlus() {
               (total, key) => total + (Number(displayResources[key]) || 0),
               0
           );
+          const forceWeight = facts.fleet.weight + facts.defense.weight;
           return {
               report,
               facts,
@@ -625,8 +634,8 @@ function initializeInfoComptePlus() {
                   crystal: formatSpyMagnitude(displayResources.crystal),
                   deuterium: formatSpyMagnitude(displayResources.deuterium)
               },
-              fleetDisplay: formatSpyMagnitude(facts.fleet.weight),
-              defenseDisplay: formatSpyMagnitude(facts.defense.weight),
+              forceWeight,
+              forceDisplay: formatSpyForceMagnitude(forceWeight),
               ageMinutes,
               ageColor: getSpyReportAgeColor(ageMinutes),
               activeMission: activeMission || null
@@ -1768,12 +1777,12 @@ if (document.readyState === "loading") {
       const tab = document.createElement("button");
       tab.type = "button";
       tab.setAttribute("aria-pressed", String(selectedSpyReportCategory === category));
-      tab.style.cssText = `position:relative;flex:1;min-width:0;padding:4px 1px 3px;border:1px solid ${selectedSpyReportCategory === category ? "#8ab4f8" : "#555"};border-radius:3px;background:${selectedSpyReportCategory === category ? "#34465d" : "#252a30"};color:#fff;font:9px Arial,sans-serif;white-space:nowrap;cursor:pointer;`;
+      tab.style.cssText = `position:relative;flex:1;min-width:0;padding:5px 1px 4px;border:${selectedSpyReportCategory === category ? "2px solid #8be9fd" : "1px solid #718096"};border-radius:4px;background:${selectedSpyReportCategory === category ? "#17445b" : "#202a36"};color:#fff;font:9px Arial,sans-serif;font-weight:${selectedSpyReportCategory === category ? "bold" : "normal"};white-space:nowrap;cursor:pointer;box-shadow:${selectedSpyReportCategory === category ? "0 0 0 1px #36bffa,inset 0 0 7px rgba(139,233,253,.3)" : "0 1px 2px rgba(0,0,0,.5)"};`;
       const label = document.createElement("span");
       label.textContent = category;
       const count = document.createElement("sup");
       count.textContent = String(categoryCounts[category]);
-      count.style.cssText = "position:absolute;top:-5px;right:1px;font:8px Arial,sans-serif;color:#ffd54f;";
+      count.style.cssText = "position:absolute;top:-5px;right:1px;display:inline-flex;min-width:12px;height:12px;box-sizing:border-box;align-items:center;justify-content:center;padding:0 2px;border:1px solid #fff;border-radius:2px;background:#ffd54f;color:#17212b;font: bold 8px Arial,sans-serif;box-shadow:0 1px 3px rgba(0,0,0,.7);";
       tab.append(label, count);
       tab.addEventListener("click", () => {
         selectedSpyReportCategory = category;
@@ -1800,7 +1809,7 @@ if (document.readyState === "loading") {
       const table = document.createElement("table");
       table.style.cssText = "border-collapse:collapse;table-layout:fixed;width:100%;font:9px Arial,sans-serif;line-height:1;text-align:center;";
       const columns = document.createElement("colgroup");
-      ["20%", "17%", "10%", "10%", "8%", "9%", "9%", "8%", "9%"].forEach(width => {
+      ["20%", "16%", "15%", "9%", "9%", "9%", "12%", "10%"].forEach(width => {
         const column = document.createElement("col");
         column.style.width = width;
         columns.appendChild(column);
@@ -1808,7 +1817,7 @@ if (document.readyState === "loading") {
       table.appendChild(columns);
 
       const body = document.createElement("tbody");
-      visibleRows.forEach(({ report, facts, resources, resourceTotal, resourceTotalDisplay, resourceDisplay, fleetDisplay, defenseDisplay, ageMinutes, ageColor, activeMission }) => {
+      visibleRows.forEach(({ report, facts, resources, resourceTotal, resourceTotalDisplay, resourceDisplay, forceWeight, forceDisplay, ageMinutes, ageColor, activeMission }) => {
         const row = document.createElement("tr");
         row.title = report.rawText || "";
         row.style.borderBottom = "1px solid #444";
@@ -1824,12 +1833,12 @@ if (document.readyState === "loading") {
         const coordinatesLink = document.createElement("a");
         coordinatesLink.href = getSpyReportNavigationUrl(report, "galaxy");
         coordinatesLink.title = "Ouvrir cette position dans la galaxie";
-        coordinatesLink.style.cssText = "color:#e8e8e8;text-decoration:none;font-size:9px;";
+        coordinatesLink.style.cssText = "display:inline-flex;align-items:center;justify-content:center;gap:2px;min-height:22px;box-sizing:border-box;padding:1px 4px;border:1px solid #53b8c2;border-radius:4px;background:#102e36;color:#f2ffff;text-decoration:none;font-size:9px;box-shadow:inset 0 0 3px rgba(83,184,194,.25);";
         coordinatesLink.appendChild(document.createTextNode(`[${report.coordinates || "?:???:??"}]`));
         if (report.locationType === "moon") {
           const moonIcon = document.createElement("figure");
           moonIcon.className = "planetIcon moon";
-          moonIcon.style.cssText = "display:inline-block;width:16px;height:16px;margin:0 0 0 2px;vertical-align:middle;";
+          moonIcon.style.cssText = "display:inline-block;width:16px;height:16px;margin:0;vertical-align:middle;";
           coordinatesLink.appendChild(moonIcon);
         }
         coordinatesLink.addEventListener("click", () => {
@@ -1899,22 +1908,20 @@ if (document.readyState === "loading") {
           resourcesCell.appendChild(resourceDisk);
         }
 
-        const fleetCell = addCell();
-        fleetCell.textContent = fleetDisplay;
-        fleetCell.style.color = "#ffb347";
-        fleetCell.title = `${facts.fleet.count} vaisseau(x)`;
-
-        const defenseCell = addCell();
-        defenseCell.textContent = defenseDisplay;
-        defenseCell.style.color = "#ff3030";
-        defenseCell.title = `${facts.defense.count} unité(s) de défense`;
+        const forceCell = addCell();
+        const forceBadge = document.createElement("span");
+        const hasForces = forceWeight > 0;
+        forceBadge.textContent = `${hasForces ? "⚔" : "✓"} ${forceDisplay}`;
+        forceBadge.title = `🚀 Flotte : ${facts.fleet.count} unité(s) — 🛡 Défense : ${facts.defense.count} unité(s) — poids total`;
+        forceBadge.style.cssText = `display:inline-flex;box-sizing:border-box;min-width:34px;min-height:23px;align-items:center;justify-content:center;gap:2px;padding:2px 3px;border:2px solid ${hasForces ? "#ff8a80" : "#69f0ae"};border-radius:12px;background:${hasForces ? "#7f1d1d" : "#14532d"};color:#fff;font: bold 9px Arial,sans-serif;white-space:nowrap;text-shadow:0 1px 1px rgba(0,0,0,.8);box-shadow:0 1px 3px rgba(0,0,0,.55),inset 0 0 3px rgba(255,255,255,.15);`;
+        forceCell.appendChild(forceBadge);
 
         const lootCell = addCell();
         const lootBadge = document.createElement("span");
         const lootPercent = report.lootPercent;
         const lootColor = lootPercent === 100 ? "#e53935" : lootPercent === 75 ? "#ff00ff" : lootPercent === 50 ? "#007bff" : "#555";
         lootBadge.textContent = lootPercent == null ? "—" : `${lootPercent}%`;
-        lootBadge.style.cssText = `display:inline-flex;box-sizing:border-box;width:24px;height:24px;align-items:center;justify-content:center;border-radius:50%;background:${lootColor};color:#fff;font:inherit;font-weight:bold;`;
+        lootBadge.style.cssText = `display:inline-flex;box-sizing:border-box;width:26px;height:26px;align-items:center;justify-content:center;border:2px solid #fff;border-radius:50%;background:${lootColor};color:#fff;font:inherit;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 3px rgba(0,0,0,.6);`;
         lootCell.appendChild(lootBadge);
 
         const ageCell = addCell();
@@ -1922,7 +1929,7 @@ if (document.readyState === "loading") {
         ageBadge.textContent = ageMinutes === null ? "--" : ageMinutes > 60 ? ">>" : String(ageMinutes).padStart(2, "0");
         const reportIsActive = Date.parse(report.expiresAt) > Date.now();
         ageBadge.title = ageMinutes === null ? "Date du rapport inconnue" : `${ageMinutes} minute(s)`;
-        ageBadge.style.cssText = `display:inline-flex;box-sizing:border-box;width:28px;height:28px;align-items:center;justify-content:center;border:2px solid ${reportIsActive ? "#008000" : "#444"};border-radius:50%;background:${ageColor};color:#fff;font:inherit;font-weight:bold;`;
+        ageBadge.style.cssText = `display:inline-flex;box-sizing:border-box;width:28px;height:28px;align-items:center;justify-content:center;border:2px solid ${reportIsActive ? "#69f0ae" : "#cbd5e1"};border-radius:50%;background:${ageColor};color:#fff;font:inherit;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 3px rgba(0,0,0,.6);`;
         ageCell.appendChild(ageBadge);
 
         const categoryCell = addCell();
@@ -1931,7 +1938,7 @@ if (document.readyState === "loading") {
         if (category === "EnnemySpy") {
           categoryBadge.textContent = "⚠";
           categoryBadge.title = "Ennemi — rapport d'espionnage ennemi";
-          categoryBadge.style.cssText = "display:inline-flex;width:28px;height:28px;align-items:center;justify-content:center;border-radius:50%;background:#7d1111;color:#ffd54f;font-size:16px;font-weight:bold;";
+          categoryBadge.style.cssText = "display:inline-flex;box-sizing:border-box;width:28px;height:28px;align-items:center;justify-content:center;border:2px solid #ffd54f;border-radius:50%;background:#7d1111;color:#fff;font-size:16px;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 3px rgba(0,0,0,.6);";
         } else {
           const categoryNumber = category.replace("Target", "");
           const categoryColors = { Target1: "#123d75", Target2: "#d87900", Target3: "#8b0000", Target4: "#777" };
@@ -1943,7 +1950,8 @@ if (document.readyState === "loading") {
           };
           categoryBadge.textContent = categoryNumber;
           categoryBadge.title = `${category} — ${categoryDescriptions[category] || ""}`;
-          categoryBadge.style.cssText = `display:inline-flex;width:28px;height:28px;align-items:center;justify-content:center;border-radius:50%;background:${categoryColors[category] || "#777"};color:#fff;font:inherit;font-weight:bold;`;
+          const categoryColor = categoryColors[category] || "#777";
+          categoryBadge.style.cssText = `display:inline-flex;box-sizing:border-box;width:28px;height:28px;align-items:center;justify-content:center;border:2px solid #dbeafe;border-radius:50%;background:${categoryColor};color:#fff;font:inherit;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 3px rgba(0,0,0,.6);`;
         }
         categoryCell.appendChild(categoryBadge);
 
@@ -1952,14 +1960,14 @@ if (document.readyState === "loading") {
           const activeIcon = document.createElement("span");
           activeIcon.textContent = "🚀";
           activeIcon.title = `${activeMission.missionId === "6" ? "Espionnage" : "Attaque"} en cours${activeMission.returning ? " (retour)" : " (aller)"}`;
-          activeIcon.style.fontSize = "16px";
+          activeIcon.style.cssText = "display:inline-flex;width:26px;height:26px;align-items:center;justify-content:center;border:1px solid #69f0ae;border-radius:50%;background:#174c35;font-size:15px;box-shadow:0 1px 3px rgba(0,0,0,.6);";
           stateCell.appendChild(activeIcon);
         } else {
           const waitingLink = document.createElement("a");
           waitingLink.href = getSpyReportNavigationUrl(report, "fleetdispatch", 1);
           waitingLink.textContent = "⏳";
           waitingLink.title = "En attente — préparer une attaque avec les vaisseaux sélectionnés";
-          waitingLink.style.fontSize = "16px";
+          waitingLink.style.cssText = "display:inline-flex;width:26px;height:26px;align-items:center;justify-content:center;border:1px solid #fbbf24;border-radius:50%;background:#513b12;font-size:15px;text-decoration:none;box-shadow:0 1px 3px rgba(0,0,0,.6);";
           waitingLink.addEventListener("click", event => {
             event.preventDefault();
             window.location.href = getSpyReportNavigationUrl(report, "fleetdispatch", 1);
@@ -1972,7 +1980,7 @@ if (document.readyState === "loading") {
         spyLink.type = "button";
         spyLink.className = "icon icon_eye";
         spyLink.title = "Lancer l'espionnage de cette cible";
-        spyLink.style.cssText = "width:24px;height:24px;padding:0;vertical-align:middle;";
+        spyLink.style.cssText = "box-sizing:border-box;width:27px;height:27px;padding:0;border:2px solid #93c5fd;border-radius:50%;background:#173451;vertical-align:middle;box-shadow:0 1px 3px rgba(0,0,0,.65);";
         const coordinates = String(report.coordinates || "").match(/^(\d{1,2}):(\d{1,3}):(\d{1,2})$/);
         if (coordinates) {
           const targetType = Number(report.targetPlanetType || (report.locationType === "moon" ? 3 : 1));
