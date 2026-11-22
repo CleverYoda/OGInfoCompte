@@ -217,6 +217,8 @@ function initializeInfoComptePlus() {
 
   const SPY_REPORT_STORAGE_KEY = "cAdditionalSpyReports";
   let spyReportsVisible = false;
+  const SPY_REPORT_CATEGORY_NAMES = ["EnnemySpy", "Target1", "Target2", "Target3", "Target4"];
+  const SPY_REPORT_RESOURCE_THRESHOLD = 1500000;
 
   function getSpyReportStore() {
       const saved = localStorage.getItem(SPY_REPORT_STORAGE_KEY);
@@ -227,6 +229,16 @@ function initializeInfoComptePlus() {
       try {
           const parsed = JSON.parse(saved);
           if (parsed && Array.isArray(parsed.reports)) {
+              const previous = JSON.stringify(parsed);
+              updateSpyReportCategories(parsed);
+              if (JSON.stringify(parsed) !== previous) {
+                  try {
+                      localStorage.setItem(SPY_REPORT_STORAGE_KEY, JSON.stringify(parsed));
+                  } catch (error) {
+                      console.error("Impossible de mettre à jour les catégories des rapports.", error);
+                      showNotification("Impossible de mettre à jour les catégories dans localStorage.","error","Spy reports");
+                  }
+              }
               return parsed;
           }
           throw new Error("Le format de la liste des rapports est invalide.");
@@ -235,14 +247,6 @@ function initializeInfoComptePlus() {
           showNotification("La liste des rapports d'espionnage est invalide.","error","Spy reports");
           return null;
       }
-  }
-
-  function logSpyReportStorage(source) {
-      const store = getSpyReportStore();
-      if (store == null) return null;
-      console.log(`[InfoComptePlus][${source}] localStorage key="${SPY_REPORT_STORAGE_KEY}", messages=${store.reports.length}`);
-      console.log(store);
-      return store;
   }
 
   function getSpyNumber(value) {
@@ -266,6 +270,103 @@ function initializeInfoComptePlus() {
           attributes[attribute.name] = attribute.value;
       });
       return attributes;
+  }
+
+  function getSpyJsonValue(value) {
+      if (value == null || value === "" || value === "-") return null;
+      try {
+          return JSON.parse(value);
+      } catch (error) {
+          console.error("Données JSON invalides dans un rapport d'espionnage.", error);
+          return null;
+      }
+  }
+
+  function getSpyUnitCount(units) {
+      if (Array.isArray(units)) {
+          return units.reduce((total, unit) => total + getSpyUnitCount(unit), 0);
+      }
+      if (units && typeof units === "object") {
+          return Object.values(units).reduce((total, unit) => total + getSpyUnitCount(unit), 0);
+      }
+      const count = Number(units);
+      return Number.isFinite(count) && count > 0 ? count : 0;
+  }
+
+  function getSpyReportFacts(report) {
+      const rawData = report.rawData || {};
+      const resources = report.resources || {};
+      const fleetUnits = getSpyJsonValue(rawData["data-raw-fleet"]) || {};
+      const defenseUnits = getSpyJsonValue(rawData["data-raw-defense"]) || {};
+      const fleetUnitCount = getSpyUnitCount(fleetUnits);
+      const defenseUnitCount = getSpyUnitCount(defenseUnits);
+      const fleetWeight = getSpyNumber(rawData["data-raw-fleetvalue"]);
+      const defenseWeight = getSpyNumber(rawData["data-raw-defensevalue"]);
+      const rawResourcesTotal = getSpyNumber(rawData["data-raw-resources"]);
+      const resourcesTotal = rawResourcesTotal === null
+          ? (resources.metal || 0) + (resources.crystal || 0) + (resources.deuterium || 0)
+          : rawResourcesTotal;
+      const rawPlayerStatus = getSpyJsonValue(rawData["data-raw-playerstatus"]);
+      const playerStatus = Array.isArray(rawPlayerStatus)
+          ? rawPlayerStatus.map(status => String(status))
+          : (rawPlayerStatus && typeof rawPlayerStatus === "object"
+              ? Object.values(rawPlayerStatus).map(status => String(status))
+              : (rawData["data-raw-playerstatus"] && rawData["data-raw-playerstatus"] !== "-"
+                  ? [String(rawData["data-raw-playerstatus"])]
+                  : []));
+      const isInactive = playerStatus.some(status => /inactive/i.test(status));
+      const enemySpy = Boolean(report.enemySpy)
+          || /ogl-spyReportTargetIsSelf/.test((report.attributes && report.attributes.class) || "");
+      const hasFleet = fleetUnitCount > 0 || (fleetWeight !== null && fleetWeight > 0);
+      const hasDefense = defenseUnitCount > 0 || (defenseWeight !== null && defenseWeight > 0);
+      let category = "Target2";
+      if (enemySpy) {
+          category = "EnnemySpy";
+      } else if (resourcesTotal < SPY_REPORT_RESOURCE_THRESHOLD) {
+          category = "Target4";
+      } else if (hasFleet || hasDefense) {
+          category = "Target3";
+      } else if (isInactive) {
+          category = "Target1";
+      }
+
+      return {
+          category,
+          resourcesTotal,
+          fleet: {
+              weight: fleetWeight === null || (fleetWeight === 0 && fleetUnitCount > 0) ? fleetUnitCount : fleetWeight,
+              units: fleetUnits,
+              count: fleetUnitCount
+          },
+          defense: {
+              weight: defenseWeight === null || (defenseWeight === 0 && defenseUnitCount > 0) ? defenseUnitCount : defenseWeight,
+              units: defenseUnits,
+              count: defenseUnitCount
+          },
+          playerStatus,
+          isInactive,
+          enemySpy,
+          targetPlanetType: Number(rawData["data-raw-targetplanettype"]) || (report.locationType === "moon" ? 3 : 1)
+      };
+  }
+
+  function updateSpyReportCategories(store) {
+      const categories = {};
+      SPY_REPORT_CATEGORY_NAMES.forEach(category => {
+          categories[category] = [];
+      });
+
+      store.reports.forEach(report => {
+          const facts = getSpyReportFacts(report);
+          Object.assign(report, facts);
+          report.fleetToSend = report.fleetToSend || { espionageProbe: 1 };
+          if (!categories[report.category]) {
+              categories[report.category] = [];
+          }
+          categories[report.category].push(report.key);
+      });
+
+      store.categories = categories;
   }
 
   function getSpyReportTimestamp(value) {
@@ -292,6 +393,9 @@ function initializeInfoComptePlus() {
           const rawText = (message.innerText || message.textContent || "").trim();
           const rawDataElement = message.querySelector(".rawMessageData");
           const rawData = rawDataElement ? getSpyReportAttributes(rawDataElement) : {};
+          const enemySpy = message.classList.contains("ogl-spyReportTargetIsSelf");
+          const reportTitle = message.querySelector(".msgTitle");
+          const titleText = reportTitle ? reportTitle.textContent : "";
           const attributeValues = [message.outerHTML];
           [message, ...message.querySelectorAll("*")].forEach(element => {
               Array.from(element.attributes).forEach(attribute => attributeValues.push(attribute.value));
@@ -306,7 +410,7 @@ function initializeInfoComptePlus() {
           const planetType = rawData["data-raw-targetplanettype"];
           const locationType = planetType === "3" || /\b(moon|lune)\b/i.test(rawText) ? "moon" : "planet";
           const messageId = message.getAttribute("data-msg-id") || String(index + 1);
-          const key = coordinates ? `coords:${coordinates}:${locationType}` : `message:${messageId}`;
+          const key = coordinates ? `coords:${coordinates}:${locationType}${enemySpy ? ":enemy" : ""}` : `message:${messageId}`;
           const resources = {
               metal: getSpyNumber(rawData["data-raw-metal"]) ?? getSpyResource(rawText, ["metal", "m[eé]tal"]),
               crystal: getSpyNumber(rawData["data-raw-crystal"]) ?? getSpyResource(rawText, ["crystal", "cristal"]),
@@ -314,8 +418,9 @@ function initializeInfoComptePlus() {
           };
           const rawLoot = rawData["data-raw-loot"];
           const rawLootPercent = /^\d+$/.test(rawLoot || "") ? parseInt(rawLoot, 10) : null;
-          const isSpyReport = (rawDataElement && [50, 75, 100].includes(rawLootPercent))
-              || /espionage|espionnage|spy report|rapport d['’ ]espionnage/i.test(searchableText);
+          const isSpyReport = enemySpy
+              || (rawDataElement && [50, 75, 100].includes(rawLootPercent))
+              || /espionage report|rapport d['’ ]espionnage/i.test(titleText);
           if (!coordinates || !isSpyReport) return;
 
           const lootMatch = searchableText.match(/(?:loot|plunder|butin|pillage)[^\n%]{0,60}\b(50|75|100)\s*%/i)
@@ -342,7 +447,9 @@ function initializeInfoComptePlus() {
               messageId,
               coordinates: coordinates || null,
               locationType,
+              targetPlanetType: Number(planetType) || (locationType === "moon" ? 3 : 1),
               resources,
+              resourcesTotal: getSpyNumber(rawData["data-raw-resources"]),
               lootPercent,
               loot: lootPercent === null
                   ? null
@@ -352,13 +459,18 @@ function initializeInfoComptePlus() {
                       deuterium: resources.deuterium === null ? null : Math.floor(resources.deuterium * lootPercent / 100)
                   },
               scannedAt: now.toISOString(),
-                  reportedAt,
-                  expiresAt,
+              reportedAt,
+              expiresAt,
+              enemySpy,
+              fleetToSend: existingReport && existingReport.fleetToSend
+                  ? existingReport.fleetToSend
+                  : { espionageProbe: 1 },
               rawText,
               rawHtml: message.innerHTML,
               attributes: getSpyReportAttributes(message),
               rawData
           };
+          Object.assign(reportData, getSpyReportFacts(reportData));
 
           if (existingIndex === -1) {
               store.reports.push(reportData);
@@ -369,6 +481,7 @@ function initializeInfoComptePlus() {
           }
       });
 
+      updateSpyReportCategories(store);
       store.updatedAt = now.toISOString();
       try {
           localStorage.setItem(SPY_REPORT_STORAGE_KEY, JSON.stringify(store));
@@ -383,15 +496,74 @@ function initializeInfoComptePlus() {
       return store;
   }
 
+  function formatSpyMagnitude(value) {
+      if (value == null || !Number.isFinite(Number(value))) return "--";
+      const amount = Number(value);
+      if (amount > 700000000000) return `${(amount / 1000000000000).toFixed(2)}T`;
+      if (amount > 700000000) return `${(amount / 1000000000).toFixed(2)}B`;
+      return `${(amount / 1000000).toFixed(2)}M`;
+  }
+
+  function getSpyReportAgeColor(ageMinutes) {
+      if (ageMinutes === null) return "#777";
+      if (ageMinutes <= 15) return "#006400";
+      if (ageMinutes <= 30) return "#ff8c00";
+      if (ageMinutes <= 45) return "#1e90ff";
+      return "#808080";
+  }
+
+  function getActiveSpyMissions() {
+      const activeMissions = new Map();
+      document.querySelectorAll("#eventContent tr.eventFleet").forEach(fleet => {
+          const missionId = fleet.getAttribute("data-mission-type");
+          if (missionId !== "1" && missionId !== "6") return;
+
+          const countdown = fleet.querySelector("td.countDown");
+          if (countdown && /^(done|terminé)$/i.test(countdown.textContent.trim())) return;
+
+          const targetLink = fleet.querySelector("td.destCoords a");
+          const match = targetLink && targetLink.textContent.match(/(\d{1,2})\s*:\s*(\d{1,3})\s*:\s*(\d{1,2})/);
+          if (!match) return;
+
+          const coordinates = `${match[1]}:${match[2]}:${match[3]}`;
+          const targetIcon = fleet.querySelector("td.destFleet .planetIcon");
+          const locationType = targetIcon && targetIcon.classList.contains("moon") ? "moon" : "planet";
+          activeMissions.set(coordinates, {
+              missionId,
+              locationType,
+              returning: fleet.getAttribute("data-return-flight") === "true"
+          });
+      });
+      return activeMissions;
+  }
+
   function getSpyReportDisplayRows(store) {
-      return store.reports.slice().sort((a, b) =>
-          String(a.coordinates || a.messageId).localeCompare(String(b.coordinates || b.messageId))
-      ).map(report => {
-          const resources = report.loot || report.resources || {};
-          const active = Date.parse(report.expiresAt) > Date.now();
+      updateSpyReportCategories(store);
+      const activeMissions = getActiveSpyMissions();
+
+      return store.reports.slice().sort((a, b) => {
+          const categoryDifference = SPY_REPORT_CATEGORY_NAMES.indexOf(a.category) - SPY_REPORT_CATEGORY_NAMES.indexOf(b.category);
+          return categoryDifference || String(a.coordinates || a.messageId).localeCompare(String(b.coordinates || b.messageId));
+      }).map(report => {
+          const facts = getSpyReportFacts(report);
+          const reportTime = Date.parse(report.reportedAt || report.scannedAt);
+          const ageMinutes = isNaN(reportTime) ? null : Math.max(0, Math.floor((Date.now() - reportTime) / 60000));
+          const activeMission = activeMissions.get(report.coordinates);
+          const displayResources = report.loot || report.resources || {};
           return {
               report,
-              text: `[${report.coordinates || "?:???:??"}] ${resources.metal ?? "?"}/${resources.crystal ?? "?"}/${resources.deuterium ?? "?"} ${report.lootPercent ?? "?"}% ${active ? "on" : "off"}`
+              facts,
+              resources: displayResources,
+              resourceDisplay: {
+                  metal: formatSpyMagnitude(displayResources.metal),
+                  crystal: formatSpyMagnitude(displayResources.crystal),
+                  deuterium: formatSpyMagnitude(displayResources.deuterium)
+              },
+              fleetDisplay: formatSpyMagnitude(facts.fleet.weight),
+              defenseDisplay: formatSpyMagnitude(facts.defense.weight),
+              ageMinutes,
+              ageColor: getSpyReportAgeColor(ageMinutes),
+              activeMission: activeMission || null
           };
       });
   }
@@ -753,7 +925,6 @@ function initializeInfoComptePlus() {
                 break;
             case 84: //t
                 if (currentPage=="messages") {
-                    logSpyReportStorage("T");
                     toggleSpyReportList();
                 }
                 break;
@@ -762,7 +933,6 @@ function initializeInfoComptePlus() {
             case 78: //n
                 if (currentPage=="messages") {
                     scanSpyReports();
-                    logSpyReportStorage("N");
                 }
                 break;
             case 86: //v
@@ -1176,6 +1346,7 @@ if (document.readyState === "loading") {
     borderRadius: "6px",
     font: "12px Arial, sans-serif",
     width: "300px",
+    maxWidth: "95vw",
     maxHeight: "85vh",
     overflowY: "auto",
     boxShadow: "0 2px 8px rgba(0,0,0,.4)"
@@ -1352,6 +1523,27 @@ if (document.readyState === "loading") {
     );
   }
 
+  function getSpyReportNavigationUrl(report, component, missionId) {
+    const coordinates = String(report.coordinates || "").match(/^(\d{1,2}):(\d{1,3}):(\d{1,2})$/);
+    if (!coordinates) return "#";
+
+    const url = new URL(window.location.href);
+    url.searchParams.set("page", "ingame");
+    url.searchParams.set("component", component);
+    url.searchParams.set("galaxy", coordinates[1]);
+    url.searchParams.set("system", coordinates[2]);
+    url.searchParams.set("position", coordinates[3]);
+
+    if (component === "fleetdispatch") {
+      const probeCount = Number(report.fleetToSend && report.fleetToSend.espionageProbe) || 1;
+      url.searchParams.set("type", String(report.targetPlanetType || (report.locationType === "moon" ? 3 : 1)));
+      url.searchParams.set("mission", String(missionId || 6));
+      url.searchParams.set("am210", String(probeCount));
+    }
+
+    return url.toString();
+  }
+
   // Affichage du détail des missions
   function renderFleetDetails(stats) {
     fleetDetails.innerHTML = "";
@@ -1399,6 +1591,7 @@ if (document.readyState === "loading") {
     const spyReportState = window.getInfoComptePlusSpyReportState
       ? window.getInfoComptePlusSpyReportState()
       : null;
+    panel.style.width = spyReportState && spyReportState.visible ? "min(95vw, 1100px)" : "300px";
     if (spyReportState && spyReportState.visible) {
       const title = document.createElement("div");
       title.textContent = `Rapports d'espionnage (${spyReportState.rows.length})`;
@@ -1406,19 +1599,155 @@ if (document.readyState === "loading") {
       fleetDetails.appendChild(title);
 
       const reportList = document.createElement("div");
-      reportList.style.cssText = "max-height:40vh;overflow-y:auto;";
+      reportList.style.cssText = "max-height:45vh;overflow:auto;margin-top:4px;";
       if (spyReportState.rows.length === 0) {
         const empty = document.createElement("div");
         empty.textContent = "Aucun rapport enregistré. Appuyez sur N pour scanner.";
         reportList.appendChild(empty);
       } else {
-        spyReportState.rows.forEach(({ report, text }) => {
-          const row = document.createElement("div");
-          row.textContent = text;
-          row.title = report.rawText || "";
-          row.style.cssText = "padding:3px 0;border-bottom:1px solid #444;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;";
-          reportList.appendChild(row);
+        const table = document.createElement("table");
+        table.style.cssText = "border-collapse:collapse;min-width:920px;width:100%;font-size:11px;line-height:1.25;text-align:center;";
+        const attachSpyDispatch = (link, report) => {
+          const coordinates = String(report.coordinates || "").match(/^(\d{1,2}):(\d{1,3}):(\d{1,2})$/);
+          if (!coordinates || typeof window.sendShipsWithPopup !== "function") return;
+          link.addEventListener("click", event => {
+            event.preventDefault();
+            window.sendShipsWithPopup(
+              6,
+              Number(coordinates[1]),
+              Number(coordinates[2]),
+              Number(coordinates[3]),
+              Number(report.targetPlanetType || (report.locationType === "moon" ? 3 : 1)),
+              100
+            );
+          });
+        };
+
+        const head = document.createElement("thead");
+        const headerRow = document.createElement("tr");
+        ["Coordonnées", "Ressources (butin estimé)", "Flotte", "Défense", "Loot", "Âge", "Catégorie", "État", "Espionner"].forEach(label => {
+          const cell = document.createElement("th");
+          cell.textContent = label;
+          cell.style.cssText = "position:sticky;top:0;background:#222;padding:5px;border-bottom:1px solid #666;white-space:nowrap;";
+          headerRow.appendChild(cell);
         });
+        head.appendChild(headerRow);
+        table.appendChild(head);
+
+        const body = document.createElement("tbody");
+        spyReportState.rows.forEach(({ report, facts, resourceDisplay, fleetDisplay, defenseDisplay, ageMinutes, ageColor, activeMission }) => {
+          const row = document.createElement("tr");
+          row.title = report.rawText || "";
+          row.style.borderBottom = "1px solid #444";
+
+          const addCell = () => {
+            const cell = document.createElement("td");
+            cell.style.cssText = "padding:4px 5px;white-space:nowrap;vertical-align:middle;";
+            row.appendChild(cell);
+            return cell;
+          };
+
+          const coordinatesCell = addCell();
+          const coordinatesLink = document.createElement("a");
+          coordinatesLink.href = getSpyReportNavigationUrl(report, "galaxy");
+          coordinatesLink.title = "Ouvrir cette position dans la galaxie";
+          coordinatesLink.style.cssText = "color:#e8e8e8;text-decoration:none;";
+          coordinatesLink.textContent = `[${report.coordinates || "?:???:??"}] ${report.locationType === "moon" ? "🌑" : "🪐"}`;
+          coordinatesCell.appendChild(coordinatesLink);
+
+          const resourcesCell = addCell();
+          [
+            ["M", resourceDisplay.metal, "#d6d6d6"],
+            ["C", resourceDisplay.crystal, "#51d6ff"],
+            ["D", resourceDisplay.deuterium, "#66dd66"]
+          ].forEach(([label, amount, color]) => {
+            const resource = document.createElement("span");
+            resource.textContent = `${label} ${amount}`;
+            resource.title = label === "M" ? "Métal" : label === "C" ? "Cristal" : "Deutérium";
+            resource.style.cssText = `display:block;color:${color};`;
+            resourcesCell.appendChild(resource);
+          });
+
+          const fleetCell = addCell();
+          fleetCell.textContent = fleetDisplay;
+          fleetCell.style.color = "#ffb347";
+          fleetCell.title = `${facts.fleet.count} vaisseau(x)`;
+
+          const defenseCell = addCell();
+          defenseCell.textContent = defenseDisplay;
+          defenseCell.style.color = "#ff3030";
+          defenseCell.title = `${facts.defense.count} unité(s) de défense`;
+
+          const lootCell = addCell();
+          const lootBadge = document.createElement("span");
+          const lootPercent = report.lootPercent;
+          const lootColor = lootPercent === 100 ? "#2e8b57" : lootPercent === 75 ? "#c47a00" : lootPercent === 50 ? "#626b75" : "#555";
+          lootBadge.textContent = lootPercent == null ? "—" : `◉ ${lootPercent}%`;
+          lootBadge.style.cssText = `display:inline-block;padding:3px 6px;border-radius:12px;background:${lootColor};color:#fff;font-weight:bold;`;
+          lootCell.appendChild(lootBadge);
+
+          const ageCell = addCell();
+          const ageBadge = document.createElement("span");
+          ageBadge.textContent = ageMinutes === null ? "--" : String(ageMinutes).padStart(2, "0");
+          const reportIsActive = Date.parse(report.expiresAt) > Date.now();
+          ageBadge.title = ageMinutes === null
+            ? `Date du rapport inconnue — rapport ${reportIsActive ? "on" : "off"}`
+            : `${ageMinutes} minute(s) — rapport ${reportIsActive ? "on" : "off"}`;
+          ageBadge.style.cssText = `display:inline-flex;width:28px;height:28px;align-items:center;justify-content:center;border-radius:50%;background:${ageColor};color:#fff;font-weight:bold;`;
+          ageCell.appendChild(ageBadge);
+          const reportStatus = document.createElement("span");
+          reportStatus.textContent = reportIsActive ? " on" : " off";
+          reportStatus.style.cssText = `margin-left:3px;color:${reportIsActive ? "#66dd66" : "#aaa"};font-size:10px;`;
+          ageCell.appendChild(reportStatus);
+
+          const categoryCell = addCell();
+          const category = report.category;
+          const categoryBadge = document.createElement("span");
+          if (category === "EnnemySpy") {
+            categoryBadge.textContent = "☠";
+            categoryBadge.title = "EnnemySpy — rapport d'espionnage ennemi";
+            categoryBadge.style.cssText = "display:inline-flex;width:28px;height:28px;align-items:center;justify-content:center;border-radius:50%;background:#7d1111;color:#fff;font-weight:bold;";
+          } else {
+            const categoryNumber = category.replace("Target", "");
+            const categoryColors = { Target1: "#123d75", Target2: "#d87900", Target3: "#8b0000", Target4: "#777" };
+            const categoryDescriptions = {
+              Target1: "≥1,5M de ressources, inactif, sans flotte ni défense",
+              Target2: "≥1,5M de ressources, non-inactif, sans flotte ni défense",
+              Target3: "≥1,5M de ressources, avec flotte ou défense",
+              Target4: "<1,5M de ressources"
+            };
+            categoryBadge.textContent = categoryNumber;
+            categoryBadge.title = `${category} — ${categoryDescriptions[category] || ""}`;
+            categoryBadge.style.cssText = `display:inline-flex;width:28px;height:28px;align-items:center;justify-content:center;border-radius:50%;background:${categoryColors[category] || "#777"};color:#fff;font-weight:bold;`;
+          }
+          categoryCell.appendChild(categoryBadge);
+
+          const stateCell = addCell();
+          if (activeMission) {
+            const activeIcon = document.createElement("span");
+            activeIcon.textContent = "🚀";
+            activeIcon.title = `${activeMission.missionId === "6" ? "Espionnage" : "Attaque"} en cours${activeMission.returning ? " (retour)" : " (aller)"}`;
+            stateCell.appendChild(activeIcon);
+          } else {
+            const waitingLink = document.createElement("a");
+            waitingLink.href = getSpyReportNavigationUrl(report, "fleetdispatch", 6);
+            waitingLink.textContent = "⏳";
+            waitingLink.title = "En attente — préparer une mission d'espionnage avec une sonde";
+            stateCell.appendChild(waitingLink);
+          }
+
+          const spyCell = addCell();
+          const spyLink = document.createElement("a");
+          spyLink.href = getSpyReportNavigationUrl(report, "fleetdispatch", 6);
+          spyLink.textContent = "👁";
+          spyLink.title = "Préparer l'espionnage de cette cible";
+          attachSpyDispatch(spyLink, report);
+          spyCell.appendChild(spyLink);
+
+          body.appendChild(row);
+        });
+        table.appendChild(body);
+        reportList.appendChild(table);
       }
       fleetDetails.appendChild(reportList);
     }
