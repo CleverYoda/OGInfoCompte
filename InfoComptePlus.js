@@ -1398,6 +1398,7 @@ if (document.readyState === "loading") {
   let detailsVisible = true;
   let lastFleetRefresh = null;
   let cachedSpyReportList = null;
+  let activeResourcesTooltip = null;
 
   // Création du panneau
   const panel = document.createElement("div");
@@ -1722,6 +1723,11 @@ if (document.readyState === "loading") {
       : null;
     if (!spyReportState || !spyReportState.visible) return;
 
+    if (activeResourcesTooltip) {
+      activeResourcesTooltip.remove();
+      activeResourcesTooltip = null;
+    }
+
     panel.style.width = "360px";
     const reportSection = document.createElement("div");
     const title = document.createElement("div");
@@ -1739,7 +1745,7 @@ if (document.readyState === "loading") {
       const table = document.createElement("table");
       table.style.cssText = "border-collapse:collapse;table-layout:fixed;width:100%;font:9px Arial,sans-serif;line-height:1;text-align:center;";
       const columns = document.createElement("colgroup");
-      ["20%", "20%", "10%", "10%", "7%", "9%", "9%", "7%", "8%"].forEach(width => {
+      ["20%", "17%", "10%", "10%", "8%", "9%", "9%", "8%", "9%"].forEach(width => {
         const column = document.createElement("col");
         column.style.width = width;
         columns.appendChild(column);
@@ -1747,14 +1753,14 @@ if (document.readyState === "loading") {
       table.appendChild(columns);
 
       const body = document.createElement("tbody");
-      spyReportState.rows.forEach(({ report, facts, resourceDisplay, fleetDisplay, defenseDisplay, ageMinutes, ageColor, activeMission }) => {
+      spyReportState.rows.forEach(({ report, facts, resources, resourceDisplay, fleetDisplay, defenseDisplay, ageMinutes, ageColor, activeMission }) => {
         const row = document.createElement("tr");
         row.title = report.rawText || "";
         row.style.borderBottom = "1px solid #444";
 
         const addCell = () => {
           const cell = document.createElement("td");
-          cell.style.cssText = "padding:1px 2px;white-space:nowrap;vertical-align:middle;overflow:hidden;";
+          cell.style.cssText = "padding:1px;white-space:nowrap;vertical-align:middle;overflow:hidden;";
           row.appendChild(cell);
           return cell;
         };
@@ -1767,9 +1773,14 @@ if (document.readyState === "loading") {
         coordinatesLink.appendChild(document.createTextNode(`[${report.coordinates || "?:???:??"}]`));
         if (report.locationType === "moon") {
           const moonIcon = document.createElement("figure");
-          moonIcon.className = "planetIcon moondestroyed";
+          moonIcon.className = "planetIcon moon";
           moonIcon.style.cssText = "display:inline-block;width:16px;height:16px;margin:0 0 0 2px;vertical-align:middle;";
           coordinatesLink.appendChild(moonIcon);
+        } else {
+          const planetIcon = document.createElement("div");
+          planetIcon.className = "ogl-planet";
+          planetIcon.style.cssText = "display:inline-block;width:16px;height:16px;margin:0 0 0 2px;vertical-align:middle;";
+          coordinatesLink.appendChild(planetIcon);
         }
         coordinatesLink.addEventListener("click", () => {
           try {
@@ -1781,17 +1792,55 @@ if (document.readyState === "loading") {
         coordinatesCell.appendChild(coordinatesLink);
 
         const resourcesCell = addCell();
-        [
-          [resourceDisplay.metal, "#d6d6d6", "Métal"],
-          [resourceDisplay.crystal, "#51d6ff", "Cristal"],
-          [resourceDisplay.deuterium, "#66dd66", "Deutérium"]
-        ].forEach(([amount, color, label]) => {
-          const resource = document.createElement("span");
-          resource.textContent = amount;
-          resource.title = label;
-          resource.style.cssText = `display:block;margin:1px 0;color:${color};`;
-          resourcesCell.appendChild(resource);
+        const resourceColors = [
+          ["metal", "#d6d6d6", "Métal"],
+          ["crystal", "#51d6ff", "Cristal"],
+          ["deuterium", "#66dd66", "Deutérium"]
+        ];
+        const resourceValues = resourceColors.map(([key]) => Math.max(0, Number(resources[key]) || 0));
+        const resourceTotal = resourceValues.reduce((sum, value) => sum + value, 0);
+        const metalEnd = resourceTotal > 0 ? resourceValues[0] / resourceTotal * 100 : 33.333;
+        const crystalEnd = resourceTotal > 0 ? (resourceValues[0] + resourceValues[1]) / resourceTotal * 100 : 66.667;
+        const resourceDisk = document.createElement("span");
+        resourceDisk.setAttribute("role", "img");
+        resourceDisk.setAttribute("aria-label", "Survoler pour afficher les ressources");
+        resourceDisk.style.cssText = `display:inline-block;width:24px;height:24px;border:1px solid #bbb;border-radius:50%;background:conic-gradient(#d6d6d6 0 ${metalEnd}%,#51d6ff ${metalEnd}% ${crystalEnd}%,#66dd66 ${crystalEnd}% 100%);cursor:help;`;
+
+        let diskTooltip = null;
+        const positionDiskTooltip = event => {
+          if (!diskTooltip) return;
+          diskTooltip.style.left = `${Math.max(4, Math.min(event.clientX + 12, window.innerWidth - diskTooltip.offsetWidth - 4))}px`;
+          diskTooltip.style.top = `${Math.max(4, Math.min(event.clientY + 12, window.innerHeight - diskTooltip.offsetHeight - 4))}px`;
+        };
+        resourceDisk.addEventListener("mouseenter", event => {
+          if (activeResourcesTooltip) activeResourcesTooltip.remove();
+          diskTooltip = document.createElement("div");
+          diskTooltip.style.cssText = "position:fixed;z-index:1000001;padding:5px 7px;background:#171d23;border:1px solid #777;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.5);pointer-events:none;font:11px Arial,sans-serif;";
+          const tooltipTable = document.createElement("table");
+          tooltipTable.style.cssText = "border-collapse:collapse;";
+          resourceColors.forEach(([key, color, label]) => {
+            const tooltipRow = document.createElement("tr");
+            const nameCell = document.createElement("td");
+            nameCell.textContent = label;
+            nameCell.style.cssText = `padding:1px 8px 1px 0;color:${color};`;
+            const amountCell = document.createElement("td");
+            amountCell.textContent = resourceDisplay[key];
+            amountCell.style.cssText = `padding:1px 0;text-align:right;color:${color};`;
+            tooltipRow.append(nameCell, amountCell);
+            tooltipTable.appendChild(tooltipRow);
+          });
+          diskTooltip.appendChild(tooltipTable);
+          document.body.appendChild(diskTooltip);
+          activeResourcesTooltip = diskTooltip;
+          positionDiskTooltip(event);
         });
+        resourceDisk.addEventListener("mousemove", positionDiskTooltip);
+        resourceDisk.addEventListener("mouseleave", () => {
+          if (diskTooltip) diskTooltip.remove();
+          if (activeResourcesTooltip === diskTooltip) activeResourcesTooltip = null;
+          diskTooltip = null;
+        });
+        resourcesCell.appendChild(resourceDisk);
 
         const fleetCell = addCell();
         fleetCell.textContent = fleetDisplay;
@@ -1806,9 +1855,9 @@ if (document.readyState === "loading") {
         const lootCell = addCell();
         const lootBadge = document.createElement("span");
         const lootPercent = report.lootPercent;
-        const lootColor = lootPercent === 100 ? "#2e8b57" : lootPercent === 75 ? "#c47a00" : lootPercent === 50 ? "#626b75" : "#555";
+        const lootColor = lootPercent === 100 ? "#e53935" : lootPercent === 75 ? "#ff00ff" : lootPercent === 50 ? "#007bff" : "#555";
         lootBadge.textContent = lootPercent == null ? "—" : `${lootPercent}%`;
-        lootBadge.style.cssText = `display:inline-block;padding:1px 2px;border-radius:12px;background:${lootColor};color:#fff;font:inherit;font-weight:bold;`;
+        lootBadge.style.cssText = `display:inline-flex;box-sizing:border-box;width:24px;height:24px;align-items:center;justify-content:center;border-radius:50%;background:${lootColor};color:#fff;font:inherit;font-weight:bold;`;
         lootCell.appendChild(lootBadge);
 
         const ageCell = addCell();
@@ -1862,22 +1911,17 @@ if (document.readyState === "loading") {
         }
 
         const spyCell = addCell();
-        const spyLink = document.createElement("a");
-        spyLink.href = "#";
-        spyLink.textContent = "👁";
+        const spyLink = document.createElement("button");
+        spyLink.type = "button";
+        spyLink.className = "icon icon_eye";
         spyLink.title = "Lancer l'espionnage de cette cible";
-        spyLink.style.fontSize = "16px";
+        spyLink.style.cssText = "width:24px;height:24px;padding:0;vertical-align:middle;";
         const coordinates = String(report.coordinates || "").match(/^(\d{1,2}):(\d{1,3}):(\d{1,2})$/);
-        const sourceSpyButton = Array.from(document.querySelectorAll(".msgEspionageBtn[data-message-id]"))
-          .find(button => button.getAttribute("data-message-id") === String(report.messageId));
-        const sourceOnclick = sourceSpyButton && sourceSpyButton.getAttribute("onclick");
-        if (sourceOnclick) {
-          spyLink.setAttribute("onclick", sourceOnclick);
-        } else if (coordinates) {
+        if (coordinates) {
           const targetType = Number(report.targetPlanetType || (report.locationType === "moon" ? 3 : 1));
           spyLink.setAttribute(
             "onclick",
-            `sendShipsWithPopup(6,${coordinates[1]},${coordinates[2]},${coordinates[3]},${targetType},100); return false;`
+            `sendShipsWithPopup(6,${coordinates[1]},${coordinates[2]},${coordinates[3]},${targetType},0); return false;`
           );
         }
         spyCell.appendChild(spyLink);
