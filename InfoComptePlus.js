@@ -216,8 +216,7 @@ function initializeInfoComptePlus() {
   }
 
   const SPY_REPORT_STORAGE_KEY = "cAdditionalSpyReports";
-  const SPY_REPORT_PANEL_ID = "cAdditionalSpyReportsPanel";
-  let spyReportPanelRefresh = null;
+  let spyReportsVisible = false;
 
   function getSpyReportStore() {
       const saved = localStorage.getItem(SPY_REPORT_STORAGE_KEY);
@@ -372,8 +371,7 @@ function initializeInfoComptePlus() {
       }
 
       showNotification(`${added} nouveau(x) rapport(s), ${updated} actualisé(s).`,"info","Spy reports");
-      const panel = document.getElementById(SPY_REPORT_PANEL_ID);
-      if (panel) renderSpyReportList(panel);
+      if (spyReportsVisible) refreshFleetDisplay();
       return store;
   }
 
@@ -390,72 +388,19 @@ function initializeInfoComptePlus() {
       });
   }
 
-  function renderSpyReportList(panel) {
-      const store = getSpyReportStore();
-      if (store == null) return;
-
-      const list = panel.querySelector(".cSpyReportList");
-      if (!list) return;
-      while (list.firstChild) list.removeChild(list.firstChild);
-
-      const rows = getSpyReportDisplayRows(store);
-
-      if (rows.length === 0) {
-          const empty = document.createElement("div");
-          empty.textContent = "Aucun rapport enregistré. Appuyez sur N pour scanner.";
-          list.appendChild(empty);
-          return;
-      }
-
-      rows.forEach(({ report, text }) => {
-          const row = document.createElement("div");
-          row.style.cssText = "padding:4px 0;border-bottom:1px solid #444;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
-          row.textContent = text;
-          row.title = report.rawText || "";
-          list.appendChild(row);
-      });
-  }
-
   function toggleSpyReportList() {
       if (currentPage !== "messages") return;
-
-      let panel = document.getElementById(SPY_REPORT_PANEL_ID);
-      if (panel) {
-          panel.remove();
-          clearInterval(spyReportPanelRefresh);
-          spyReportPanelRefresh = null;
-          return;
-      }
-
-      panel = document.createElement("div");
-      panel.id = SPY_REPORT_PANEL_ID;
-      panel.style.cssText = "position:fixed;top:110px;left:10px;z-index:999998;width:240px;max-height:65vh;overflow:auto;box-sizing:border-box;padding:8px;background:#171d23;color:#fff;border:1px solid #555;border-radius:5px;font:12px Arial,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.5);";
-
-      const header = document.createElement("div");
-      header.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-weight:bold;";
-      const title = document.createElement("span");
-      title.textContent = "Rapports d'espionnage";
-      const close = document.createElement("button");
-      close.type = "button";
-      close.textContent = "×";
-      close.title = "Fermer";
-      close.style.cssText = "cursor:pointer;background:transparent;color:#fff;border:0;font-size:18px;";
-      close.addEventListener("click", () => {
-          panel.remove();
-          clearInterval(spyReportPanelRefresh);
-          spyReportPanelRefresh = null;
-      });
-      header.append(title, close);
-
-      const list = document.createElement("div");
-      list.className = "cSpyReportList";
-      panel.append(header, list);
-      document.body.appendChild(panel);
-      renderSpyReportList(panel);
-      spyReportPanelRefresh = setInterval(() => {
-          if (document.getElementById(SPY_REPORT_PANEL_ID)) renderSpyReportList(panel);
-      }, 60000);
+      spyReportsVisible = !spyReportsVisible;
+      refreshFleetDisplay();
   }
+
+  window.getInfoComptePlusSpyReportState = function() {
+      const store = getSpyReportStore();
+      return {
+          visible: spyReportsVisible,
+          rows: store ? getSpyReportDisplayRows(store) : []
+      };
+  };
 
   if (!window.infoComptePlusKeyboardInstalled) {
     window.infoComptePlusKeyboardInstalled = true;
@@ -798,31 +743,14 @@ function initializeInfoComptePlus() {
             case 77: //m
                 break;
             case 84: //t
-                console.log("[InfoComptePlus] T appuyé; currentPage =", currentPage);
-                if (currentPage=="messages") {
-                    const store = getSpyReportStore();
-                    if (store) {
-                        const rows = getSpyReportDisplayRows(store).map(row => row.text);
-                        console.log("[InfoComptePlus] Affichage du panneau T :\n" + (rows.length ? rows.join("\n") : "Aucun rapport enregistré."));
-                    }
+                if (currentPage=="messages")
                     toggleSpyReportList();
-                } else {
-                    console.warn("[InfoComptePlus] T ignoré : la page courante n'est pas 'messages'.");
-                }
                 break;
             case 70: //f
                 break;
             case 78: //n
-                console.log("[InfoComptePlus] N appuyé; currentPage =", currentPage);
-                if (currentPage=="messages") {
-                    const store = scanSpyReports();
-                    if (store) {
-                        console.log("[InfoComptePlus] Objet JSON cAdditionalSpyReports :", store);
-                        console.log(JSON.stringify(store, null, 2));
-                    }
-                } else {
-                    console.warn("[InfoComptePlus] N ignoré : la page courante n'est pas 'messages'.");
-                }
+                if (currentPage=="messages")
+                    scanSpyReports();
                 break;
             case 86: //v
                 break;
@@ -1234,7 +1162,9 @@ if (document.readyState === "loading") {
     padding: "10px",
     borderRadius: "6px",
     font: "12px Arial, sans-serif",
-    minWidth: "190px",
+    width: "300px",
+    maxHeight: "85vh",
+    overflowY: "auto",
     boxShadow: "0 2px 8px rgba(0,0,0,.4)"
   });
 
@@ -1452,6 +1382,33 @@ if (document.readyState === "loading") {
       `MAJ : ${lastFleetRefresh ? formatTimestamp(lastFleetRefresh) : "--"}`;
 
     fleetDetails.appendChild(updateLine);
+
+    const spyReportState = window.getInfoComptePlusSpyReportState
+      ? window.getInfoComptePlusSpyReportState()
+      : null;
+    if (spyReportState && spyReportState.visible) {
+      const title = document.createElement("div");
+      title.textContent = `Rapports d'espionnage (${spyReportState.rows.length})`;
+      title.style.cssText = "margin-top:5px;padding-top:4px;border-top:1px solid #444;font-weight:bold;";
+      fleetDetails.appendChild(title);
+
+      const reportList = document.createElement("div");
+      reportList.style.cssText = "max-height:40vh;overflow-y:auto;";
+      if (spyReportState.rows.length === 0) {
+        const empty = document.createElement("div");
+        empty.textContent = "Aucun rapport enregistré. Appuyez sur N pour scanner.";
+        reportList.appendChild(empty);
+      } else {
+        spyReportState.rows.forEach(({ report, text }) => {
+          const row = document.createElement("div");
+          row.textContent = text;
+          row.title = report.rawText || "";
+          row.style.cssText = "padding:3px 0;border-bottom:1px solid #444;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;";
+          reportList.appendChild(row);
+        });
+      }
+      fleetDetails.appendChild(reportList);
+    }
   }
 
   // Actualisation de la partie flotte
