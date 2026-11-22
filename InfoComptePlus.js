@@ -2092,7 +2092,7 @@ if (document.readyState === "loading") {
       reportList.appendChild(empty);
     } else {
       const reportGrid = document.createElement("div");
-      reportGrid.style.cssText = "display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;width:100%;align-items:stretch;";
+      reportGrid.style.cssText = "display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;width:100%;align-items:stretch;";
       visibleRows.forEach(({ report, facts, resources, resourceTotal, resourceTotalDisplay, resourceDisplay, forceWeight, forceDisplay, counterEspionageChance, ageMinutes, ageColor, activeMission }) => {
         const card = document.createElement("div");
         card.title = report.rawText || "";
@@ -2243,12 +2243,14 @@ if (document.readyState === "loading") {
         }
         contents.appendChild(forceBadge);
 
-        const lootBadge = document.createElement("span");
-        const lootPercent = report.lootPercent;
-        const lootColor = lootPercent === 100 ? "#e53935" : lootPercent === 75 ? "#ff00ff" : lootPercent === 50 ? "#007bff" : "#555";
-        lootBadge.textContent = lootPercent == null ? "—" : `${lootPercent}%`;
-        lootBadge.style.cssText = `display:inline-flex;flex:0 0 auto;box-sizing:border-box;width:17px;height:17px;align-items:center;justify-content:center;border:1px solid rgba(235,242,250,.8);border-radius:50%;background:${lootColor};color:#fff;font:8px Arial,sans-serif;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 2px rgba(0,0,0,.45);`;
-        contents.appendChild(lootBadge);
+        if (!isEnemySpy) {
+          const lootBadge = document.createElement("span");
+          const lootPercent = report.lootPercent;
+          const lootColor = lootPercent === 100 ? "#e53935" : lootPercent === 75 ? "#ff00ff" : lootPercent === 50 ? "#007bff" : "#555";
+          lootBadge.textContent = lootPercent == null ? "—" : `${lootPercent}%`;
+          lootBadge.style.cssText = `display:inline-flex;flex:0 0 auto;box-sizing:border-box;width:17px;height:17px;align-items:center;justify-content:center;border:1px solid rgba(235,242,250,.8);border-radius:50%;background:${lootColor};color:#fff;font:8px Arial,sans-serif;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 2px rgba(0,0,0,.45);`;
+          contents.appendChild(lootBadge);
+        }
 
         const ageBadge = document.createElement("span");
         ageBadge.textContent = ageMinutes === null ? "--" : ageMinutes > 60 ? ">>" : String(ageMinutes).padStart(2, "0");
@@ -2284,23 +2286,23 @@ if (document.readyState === "loading") {
           contents.appendChild(waitingLink);
         }
 
-        const spyLink = document.createElement("button");
-        spyLink.type = "button";
-        spyLink.className = "icon icon_eye";
-        spyLink.disabled = isEnemySpy;
-        spyLink.title = isEnemySpy ? "Espionnage désactivé pour les rapports ennemis" : "Lancer l'espionnage de cette cible";
-        spyLink.setAttribute("aria-label", spyLink.title);
-        spyLink.style.cssText = "flex:0 0 auto;box-sizing:border-box;width:17px;height:17px;padding:0;border:1px solid #82aaca;border-radius:50%;background:#173451;vertical-align:middle;box-shadow:0 1px 2px rgba(0,0,0,.45);";
-        const coordinates = String(report.coordinates || "").match(/^(\d{1,2}):(\d{1,3}):(\d{1,2})$/);
-        if (!isEnemySpy && coordinates) {
-          const targetType = Number(report.targetPlanetType || (report.locationType === "moon" ? 3 : 1));
-          spyLink.setAttribute(
-            "onclick",
-            `sendShipsWithPopup(6,${coordinates[1]},${coordinates[2]},${coordinates[3]},${targetType},100); return false;`
-          );
+        if (!isEnemySpy) {
+          const spyLink = document.createElement("button");
+          spyLink.type = "button";
+          spyLink.className = "icon icon_eye";
+          spyLink.title = "Lancer l'espionnage de cette cible";
+          spyLink.setAttribute("aria-label", spyLink.title);
+          spyLink.style.cssText = "flex:0 0 auto;box-sizing:border-box;width:17px;height:17px;padding:0;border:1px solid #82aaca;border-radius:50%;background:#173451;vertical-align:middle;box-shadow:0 1px 2px rgba(0,0,0,.45);";
+          const coordinates = String(report.coordinates || "").match(/^(\d{1,2}):(\d{1,3}):(\d{1,2})$/);
+          if (coordinates) {
+            const targetType = Number(report.targetPlanetType || (report.locationType === "moon" ? 3 : 1));
+            spyLink.setAttribute(
+              "onclick",
+              `sendShipsWithPopup(6,${coordinates[1]},${coordinates[2]},${coordinates[3]},${targetType},100); return false;`
+            );
+          }
+          contents.appendChild(spyLink);
         }
-        if (isEnemySpy) spyLink.style.opacity = "0.35";
-        contents.appendChild(spyLink);
 
         const deleteButton = document.createElement("button");
         deleteButton.type = "button";
