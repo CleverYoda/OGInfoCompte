@@ -377,6 +377,26 @@ function initializeInfoComptePlus() {
       store.categories = categories;
   }
 
+  function persistSpyReportStore(store, errorMessage) {
+      updateSpyReportCategories(store);
+      store.updatedAt = new Date().toISOString();
+      try {
+          localStorage.setItem(SPY_REPORT_STORAGE_KEY, JSON.stringify(store));
+          return true;
+      } catch (error) {
+          console.error(errorMessage, error);
+          showNotification("Impossible d'enregistrer la modification des rapports dans localStorage.","error","Spy reports");
+          return false;
+      }
+  }
+
+  function isSpyReportExpired(report, now = Date.now()) {
+      const expiry = Date.parse(report.expiresAt || "");
+      if (!isNaN(expiry)) return expiry <= now;
+      const reportTime = Date.parse(report.reportedAt || report.scannedAt || "");
+      return !isNaN(reportTime) && reportTime + 60 * 60 * 1000 <= now;
+  }
+
   function getSpyReportFleetSelection(report) {
       const selectedShipIds = new Set();
       document.querySelectorAll("span.ogl-option.ogl-fleet-ship.choice").forEach(option => {
@@ -766,13 +786,67 @@ function initializeInfoComptePlus() {
 
   window.getInfoComptePlusSpyReportState = function() {
       const store = getSpyReportStore();
+      const expiredCounts = {};
+      SPY_REPORT_CATEGORY_NAMES.forEach(category => {
+          expiredCounts[category] = store
+              ? store.reports.filter(report => report.category === category && isSpyReportExpired(report)).length
+              : 0;
+      });
       return {
           visible: spyReportsVisible,
-          rows: store ? getSpyReportDisplayRows(store) : []
+          rows: store ? getSpyReportDisplayRows(store) : [],
+          sortByCategory: store && store.sortByCategory && typeof store.sortByCategory === "object"
+              ? store.sortByCategory
+              : {},
+          expiredCounts
       };
   };
   window.setInfoComptePlusSpyReportsVisible = function(visible) {
       spyReportsVisible = Boolean(visible);
+  };
+  window.deleteInfoComptePlusSpyReport = function(reportKey) {
+      const store = getSpyReportStore();
+      if (!store) return false;
+      const remainingReports = store.reports.filter(report => report.key !== reportKey);
+      if (remainingReports.length === store.reports.length) return false;
+      store.reports = remainingReports;
+      return persistSpyReportStore(store, "Impossible de supprimer un rapport d'espionnage.");
+  };
+  window.deleteInfoComptePlusSpyReportCategory = function(category, expiredOnly) {
+      if (!SPY_REPORT_CATEGORY_NAMES.includes(category)) {
+          console.error(`Catégorie de rapports invalide : ${category}`);
+          showNotification("Catégorie de rapports invalide.","error","Spy reports");
+          return null;
+      }
+      const store = getSpyReportStore();
+      if (!store) return null;
+      const now = Date.now();
+      const removedReports = store.reports.filter(report =>
+          report.category === category && (!expiredOnly || isSpyReportExpired(report, now))
+      );
+      if (removedReports.length === 0) return 0;
+      const removedKeys = new Set(removedReports.map(report => report.key));
+      store.reports = store.reports.filter(report => !removedKeys.has(report.key));
+      return persistSpyReportStore(store, "Impossible de supprimer des rapports d'espionnage.")
+          ? removedReports.length
+          : null;
+  };
+  window.setInfoComptePlusSpyReportSort = function(category, field, direction) {
+      const sortableFields = ["resourcesTotal", "metal", "crystal", "deuterium", "age"];
+      if (!SPY_REPORT_CATEGORY_NAMES.includes(category)
+          || !sortableFields.includes(field)
+          || !["asc", "desc"].includes(direction)) {
+          console.error("Paramètres de tri des rapports invalides.", { category, field, direction });
+          showNotification("Paramètres de tri invalides.","error","Spy reports");
+          return false;
+      }
+      const store = getSpyReportStore();
+      if (!store) return false;
+      if (!store.sortByCategory || typeof store.sortByCategory !== "object") {
+          store.sortByCategory = {};
+      }
+      store.sortByCategory[category] = { field, direction };
+      return persistSpyReportStore(store, "Impossible de mémoriser le tri des rapports.");
   };
 
   window.getInfoComptePlusFleetSelection = function(report) {
@@ -1531,6 +1605,7 @@ if (document.readyState === "loading") {
   let lastFleetRefresh = null;
   let messageHolderForReports = null;
   let spyReportViewElement = null;
+  let spyMessagesOriginalStyles = null;
   let activeResourcesTooltip = null;
   const SPY_REPORT_TAB_CATEGORIES = ["EnnemySpy", "Target1", "Target2", "Target3", "Target4"];
   const SPY_REPORT_SELECTED_CATEGORY_KEY = "cAdditionalSpyReportSelectedCategory";
@@ -1868,10 +1943,10 @@ if (document.readyState === "loading") {
     }
 
     const reportSection = document.createElement("div");
-    reportSection.style.cssText = "width:100%;box-sizing:border-box;padding:8px;color:#f2f2f2;";
+    reportSection.style.cssText = "width:100%;box-sizing:border-box;padding:4px;color:#f2f2f2;font:12px Arial,sans-serif;";
     const title = document.createElement("div");
     title.textContent = `Rapports d'espionnage (${spyReportState.rows.length}) — T : messages`;
-    title.style.cssText = "margin-bottom:8px;padding:6px;border-bottom:1px solid #52616f;font-weight:bold;";
+    title.style.cssText = "margin-bottom:4px;padding:4px;border-bottom:1px solid #52616f;font-weight:bold;";
     reportSection.appendChild(title);
 
     const categoryCounts = {};
@@ -1885,7 +1960,7 @@ if (document.readyState === "loading") {
     });
 
     const tabs = document.createElement("div");
-    tabs.style.cssText = "display:flex;gap:2px;margin-top:4px;width:100%;";
+    tabs.style.cssText = "display:flex;gap:2px;margin-top:2px;width:100%;";
     SPY_REPORT_TAB_CATEGORIES.forEach(category => {
       const tab = document.createElement("button");
       tab.type = "button";
@@ -1911,53 +1986,137 @@ if (document.readyState === "loading") {
     });
     reportSection.appendChild(tabs);
 
+    const savedSort = spyReportState.sortByCategory[selectedSpyReportCategory] || {};
+    const validSortFields = ["resourcesTotal", "metal", "crystal", "deuterium", "age"];
+    const hasSavedSort = validSortFields.includes(savedSort.field);
+    const sortField = hasSavedSort ? savedSort.field : "resourcesTotal";
+    const sortDirection = savedSort.direction === "asc" ? "asc" : "desc";
+    const visibleRows = spyReportState.rows
+      .filter(({ report }) => report.category === selectedSpyReportCategory)
+      .slice();
+    const getSortValue = row => {
+      if (sortField === "age") return row.ageMinutes;
+      if (sortField === "resourcesTotal") return row.resourceTotal;
+      return Number(row.resources[sortField]) || 0;
+    };
+    visibleRows.sort((a, b) => {
+      const aValue = getSortValue(a);
+      const bValue = getSortValue(b);
+      if (aValue == null || bValue == null) {
+        if (aValue == null && bValue != null) return 1;
+        if (aValue != null && bValue == null) return -1;
+      } else if (aValue !== bValue) {
+        return (sortDirection === "desc" ? -1 : 1) * (aValue - bValue);
+      }
+      return String(a.report.coordinates || a.report.messageId)
+        .localeCompare(String(b.report.coordinates || b.report.messageId));
+    });
+
+    const toolbar = document.createElement("div");
+    toolbar.style.cssText = "display:flex;justify-content:flex-end;align-items:center;flex-wrap:wrap;gap:2px;margin:3px 0 4px;";
+    const addToolbarButton = (label, buttonTitle, onClick, options = {}) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.title = buttonTitle;
+      button.setAttribute("aria-label", buttonTitle);
+      button.setAttribute("aria-pressed", String(Boolean(options.active)));
+      button.disabled = Boolean(options.disabled);
+      button.style.cssText = `display:inline-flex;min-width:25px;height:24px;box-sizing:border-box;align-items:center;justify-content:center;padding:0 4px;border:1px solid ${options.active ? "#70cfff" : "#75879a"};border-radius:4px;background:${options.active ? "#17445b" : options.danger ? "#482126" : "#202a36"};color:#fff;font:bold 11px Arial,sans-serif;cursor:${options.disabled ? "default" : "pointer"};opacity:${options.disabled ? ".45" : "1"};box-shadow:0 1px 2px rgba(0,0,0,.4);`;
+      button.addEventListener("click", onClick);
+      toolbar.appendChild(button);
+      return button;
+    };
+
+    addToolbarButton(
+      "🗑",
+      `Supprimer tous les rapports sauvegardés de ${selectedSpyReportCategory}`,
+      () => {
+        const count = categoryCounts[selectedSpyReportCategory];
+        if (!count || !window.confirm(`Supprimer les ${count} rapport(s) enregistrés dans ${selectedSpyReportCategory} ?`)) return;
+        const removed = window.deleteInfoComptePlusSpyReportCategory(selectedSpyReportCategory, false);
+        if (removed === null) return;
+        showNotification(`${removed} rapport(s) supprimé(s) de ${selectedSpyReportCategory}.`,"success","Spy reports");
+        renderSpyReportList();
+      },
+      { danger: true, disabled: categoryCounts[selectedSpyReportCategory] === 0 }
+    );
+    const expiredCount = spyReportState.expiredCounts[selectedSpyReportCategory] || 0;
+    addToolbarButton(
+      "⌛",
+      `Supprimer les ${expiredCount} rapport(s) expirés depuis plus d'une heure de ${selectedSpyReportCategory}`,
+      () => {
+        if (!expiredCount || !window.confirm(`Supprimer les ${expiredCount} rapport(s) expirés de ${selectedSpyReportCategory} ?`)) return;
+        const removed = window.deleteInfoComptePlusSpyReportCategory(selectedSpyReportCategory, true);
+        if (removed === null) return;
+        showNotification(`${removed} rapport(s) expiré(s) supprimé(s).`,"success","Spy reports");
+        renderSpyReportList();
+      },
+      { danger: true, disabled: expiredCount === 0 }
+    );
+
+    const sortButtons = [
+      ["resourcesTotal", "Σ", "somme des ressources"],
+      ["metal", "M", "métal"],
+      ["crystal", "C", "cristal"],
+      ["deuterium", "D", "deutérium"],
+      ["age", "◷", "âge"]
+    ];
+    sortButtons.forEach(([field, icon, label]) => {
+      const active = sortField === field;
+      const direction = active ? sortDirection : "desc";
+      const directionIcon = direction === "desc" ? "↓" : "↑";
+      addToolbarButton(
+        `${icon}${active ? directionIcon : ""}`,
+        `Trier par ${label} ${direction === "desc" ? "décroissant" : "croissant"}${active ? " (tri actif)" : ""}`,
+        () => {
+          const nextDirection = active && hasSavedSort && sortDirection === "desc" ? "asc" : "desc";
+          if (window.setInfoComptePlusSpyReportSort(
+            selectedSpyReportCategory,
+            field,
+            nextDirection
+          )) {
+            renderSpyReportList();
+          }
+        },
+        { active }
+      );
+    });
+    reportSection.appendChild(toolbar);
+
     const reportList = document.createElement("div");
-    reportList.style.cssText = "max-height:45vh;overflow:auto;margin-top:4px;width:100%;";
-    const visibleRows = spyReportState.rows.filter(({ report }) => report.category === selectedSpyReportCategory);
+    reportList.style.cssText = "width:100%;max-height:none;overflow:visible;margin-top:2px;";
     if (visibleRows.length === 0) {
       const empty = document.createElement("div");
       empty.textContent = `Aucun rapport dans ${selectedSpyReportCategory}. Appuyez sur N pour scanner.`;
       reportList.appendChild(empty);
     } else {
-      const table = document.createElement("table");
-      table.style.cssText = "border-collapse:collapse;table-layout:fixed;width:100%;font:9px Arial,sans-serif;line-height:1;text-align:center;";
-      const columns = document.createElement("colgroup");
-      ["20%", "16%", "15%", "9%", "9%", "9%", "12%", "10%"].forEach(width => {
-        const column = document.createElement("col");
-        column.style.width = width;
-        columns.appendChild(column);
-      });
-      table.appendChild(columns);
-
-      const body = document.createElement("tbody");
+      const reportGrid = document.createElement("div");
+      reportGrid.style.cssText = "display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:3px;width:100%;align-items:stretch;";
       visibleRows.forEach(({ report, facts, resources, resourceTotal, resourceTotalDisplay, resourceDisplay, forceWeight, forceDisplay, counterEspionageChance, ageMinutes, ageColor, activeMission }) => {
-        const row = document.createElement("tr");
-        row.title = report.rawText || "";
-        row.style.borderBottom = "1px solid #444";
+        const card = document.createElement("div");
+        card.title = report.rawText || "";
+        card.style.cssText = "position:relative;min-width:0;box-sizing:border-box;padding:3px 23px 3px 3px;border:1px solid #8297ab;border-radius:4px;background:linear-gradient(145deg,#202a35,#151c24);box-shadow:0 1px 3px rgba(0,0,0,.4);";
         const isEnemySpy = report.category === "EnnemySpy";
         const rawData = report.rawData || {};
 
-        const addCell = () => {
-          const cell = document.createElement("td");
-          cell.style.cssText = "padding:1px;white-space:nowrap;vertical-align:middle;overflow:hidden;";
-          row.appendChild(cell);
-          return cell;
-        };
+        const contents = document.createElement("div");
+        contents.style.cssText = "display:flex;align-items:center;align-content:center;flex-wrap:wrap;gap:2px;min-width:0;min-height:24px;";
 
-        const addCoordinateLink = (cell, coordinatesValue, locationType, title, compact = false) => {
+        const addCoordinateLink = (container, coordinatesValue, locationType, title, compact = false) => {
           const normalizedCoordinates = normalizeSpyCoordinates(coordinatesValue);
           const coordinatesLink = document.createElement("a");
           coordinatesLink.href = normalizedCoordinates
             ? getSpyReportNavigationUrl({ coordinates: normalizedCoordinates }, "galaxy")
             : "#";
           coordinatesLink.title = title;
-          coordinatesLink.style.cssText = `display:inline-flex;align-items:center;justify-content:center;gap:2px;min-height:26px;box-sizing:border-box;padding:3px ${compact ? 2 : 6}px;border:1px solid #527f88;border-radius:4px;background:#102e36;color:#f2ffff;text-decoration:none;font-size:${compact ? 8 : 9}px;box-shadow:inset 0 0 2px rgba(83,184,194,.18);`;
+          coordinatesLink.style.cssText = `display:inline-flex;align-items:center;justify-content:center;gap:2px;min-height:24px;box-sizing:border-box;padding:2px ${compact ? 2 : 4}px;border:1px solid #527f88;border-radius:4px;background:#102e36;color:#f2ffff;text-decoration:none;font-size:${compact ? 8 : 9}px;box-shadow:inset 0 0 2px rgba(83,184,194,.18);`;
           const coordinateLabel = normalizedCoordinates || "?:???:??";
           coordinatesLink.appendChild(document.createTextNode(compact ? coordinateLabel : `[${coordinateLabel}]`));
           if (locationType === "moon") {
             const moonIcon = document.createElement("figure");
             moonIcon.className = "planetIcon moon";
-            moonIcon.style.cssText = "display:inline-block;width:16px;height:16px;margin:0;vertical-align:middle;";
+            moonIcon.style.cssText = "display:inline-block;width:14px;height:14px;margin:0;vertical-align:middle;";
             coordinatesLink.appendChild(moonIcon);
           }
           coordinatesLink.addEventListener("click", event => {
@@ -1971,10 +2130,10 @@ if (document.readyState === "loading") {
               console.error("Impossible de mémoriser la position à surligner.", error);
             }
           });
-          cell.appendChild(coordinatesLink);
+          container.appendChild(coordinatesLink);
         };
 
-        const coordinatesCell = addCell();
+        const coordinatesGroup = document.createElement("span");
         if (isEnemySpy) {
           const sourceCoordinates = rawData["data-raw-sourceplanetcoordinates"];
           const sourcePlayerName = rawData["data-raw-sourceplayername"] || "Ennemi inconnu";
@@ -1988,17 +2147,19 @@ if (document.readyState === "loading") {
             `ID joueur : ${sourcePlayerId}`,
             `ID planète : ${sourcePlanetId}`
           ];
-          addCoordinateLink(coordinatesCell, sourceCoordinates, sourceLocationType, sourceDetails.join("\n"));
+          addCoordinateLink(coordinatesGroup, sourceCoordinates, sourceLocationType, sourceDetails.join("\n"));
         } else {
           addCoordinateLink(
-            coordinatesCell,
+            coordinatesGroup,
             report.coordinates,
             report.locationType,
             "Ouvrir cette position dans la galaxie"
           );
         }
+        contents.appendChild(coordinatesGroup);
 
-        const resourcesCell = addCell();
+        const resourcesCell = document.createElement("span");
+        resourcesCell.style.cssText = "display:inline-flex;align-items:center;gap:2px;";
         const resourceColors = [
           ["metal", "#d6d6d6", "Métal"],
           ["crystal", "#51d6ff", "Cristal"],
@@ -2019,13 +2180,13 @@ if (document.readyState === "loading") {
           const crystalEnd = (resourceValues[0] + resourceValues[1]) / resourceTotal * 100;
           const totalLabel = document.createElement("div");
           totalLabel.textContent = resourceTotalDisplay;
-          totalLabel.style.cssText = "margin-bottom:1px;color:#fff;font:inherit;white-space:nowrap;";
+          totalLabel.style.cssText = "margin-right:2px;color:#fff;font:9px Arial,sans-serif;white-space:nowrap;";
           resourcesCell.appendChild(totalLabel);
 
           const resourceDisk = document.createElement("span");
           resourceDisk.setAttribute("role", "img");
           resourceDisk.setAttribute("aria-label", "Survoler pour afficher les ressources");
-          resourceDisk.style.cssText = `display:inline-block;width:24px;height:24px;border:1px solid #aeb9c4;border-radius:50%;background:conic-gradient(${diskColors[0]} 0 ${metalEnd}%,${diskColors[1]} ${metalEnd}% ${crystalEnd}%,${diskColors[2]} ${crystalEnd}% 100%);cursor:help;box-shadow:0 1px 2px rgba(0,0,0,.4);`;
+          resourceDisk.style.cssText = `display:inline-block;width:20px;height:20px;border:1px solid #aeb9c4;border-radius:50%;background:conic-gradient(${diskColors[0]} 0 ${metalEnd}%,${diskColors[1]} ${metalEnd}% ${crystalEnd}%,${diskColors[2]} ${crystalEnd}% 100%);cursor:help;box-shadow:0 1px 2px rgba(0,0,0,.4);`;
 
           let diskTooltip = null;
           const positionDiskTooltip = event => {
@@ -2063,8 +2224,8 @@ if (document.readyState === "loading") {
           });
           resourcesCell.appendChild(resourceDisk);
         }
+        contents.appendChild(resourcesCell);
 
-        const forceCell = addCell();
         const forceBadge = document.createElement("span");
         if (isEnemySpy) {
           const chance = counterEspionageChance;
@@ -2073,38 +2234,35 @@ if (document.readyState === "loading") {
           forceBadge.title = chance === null
             ? "Chance de contre-espionnage inconnue"
             : `Chance de contre-espionnage détectée : ${chance}%`;
-          forceBadge.style.cssText = `display:inline-flex;box-sizing:border-box;min-width:34px;min-height:23px;align-items:center;justify-content:center;padding:2px 4px;border:1px solid ${chance === null ? "#aeb9c4" : `hsl(${hue},65%,58%)`};border-radius:12px;background:${chance === null ? "#4b5563" : `hsl(${hue},72%,30%)`};color:#fff;font:bold 9px Arial,sans-serif;text-shadow:0 1px 1px rgba(0,0,0,.8);box-shadow:0 1px 2px rgba(0,0,0,.4);`;
+          forceBadge.style.cssText = `display:inline-flex;box-sizing:border-box;min-width:31px;min-height:20px;align-items:center;justify-content:center;padding:1px 3px;border:1px solid ${chance === null ? "#aeb9c4" : `hsl(${hue},65%,58%)`};border-radius:12px;background:${chance === null ? "#4b5563" : `hsl(${hue},72%,30%)`};color:#fff;font:bold 8px Arial,sans-serif;text-shadow:0 1px 1px rgba(0,0,0,.8);box-shadow:0 1px 2px rgba(0,0,0,.4);`;
         } else {
           const hasForces = forceWeight > 0;
           forceBadge.textContent = `${hasForces ? "⚔" : "✓"} ${forceDisplay}`;
           forceBadge.title = `🚀 Flotte : ${facts.fleet.count} unité(s) — 🛡 Défense : ${facts.defense.count} unité(s) — poids total`;
-          forceBadge.style.cssText = `display:inline-flex;box-sizing:border-box;min-width:34px;min-height:23px;align-items:center;justify-content:center;gap:2px;padding:2px 3px;border:1px solid ${hasForces ? "#d97870" : "#59c894"};border-radius:12px;background:${hasForces ? "#7f1d1d" : "#14532d"};color:#fff;font:bold 9px Arial,sans-serif;white-space:nowrap;text-shadow:0 1px 1px rgba(0,0,0,.8);box-shadow:0 1px 2px rgba(0,0,0,.4);`;
+          forceBadge.style.cssText = `display:inline-flex;box-sizing:border-box;min-width:31px;min-height:20px;align-items:center;justify-content:center;gap:2px;padding:1px 3px;border:1px solid ${hasForces ? "#d97870" : "#59c894"};border-radius:12px;background:${hasForces ? "#7f1d1d" : "#14532d"};color:#fff;font:bold 8px Arial,sans-serif;white-space:nowrap;text-shadow:0 1px 1px rgba(0,0,0,.8);box-shadow:0 1px 2px rgba(0,0,0,.4);`;
         }
-        forceCell.appendChild(forceBadge);
+        contents.appendChild(forceBadge);
 
-        const lootCell = addCell();
         const lootBadge = document.createElement("span");
         const lootPercent = report.lootPercent;
         const lootColor = lootPercent === 100 ? "#e53935" : lootPercent === 75 ? "#ff00ff" : lootPercent === 50 ? "#007bff" : "#555";
         lootBadge.textContent = lootPercent == null ? "—" : `${lootPercent}%`;
-        lootBadge.style.cssText = `display:inline-flex;box-sizing:border-box;width:26px;height:26px;align-items:center;justify-content:center;border:1px solid rgba(235,242,250,.8);border-radius:50%;background:${lootColor};color:#fff;font:inherit;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 2px rgba(0,0,0,.45);`;
-        lootCell.appendChild(lootBadge);
+        lootBadge.style.cssText = `display:inline-flex;box-sizing:border-box;width:22px;height:22px;align-items:center;justify-content:center;border:1px solid rgba(235,242,250,.8);border-radius:50%;background:${lootColor};color:#fff;font:8px Arial,sans-serif;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 2px rgba(0,0,0,.45);`;
+        contents.appendChild(lootBadge);
 
-        const ageCell = addCell();
         const ageBadge = document.createElement("span");
         ageBadge.textContent = ageMinutes === null ? "--" : ageMinutes > 60 ? ">>" : String(ageMinutes).padStart(2, "0");
         const reportIsActive = Date.parse(report.expiresAt) > Date.now();
         ageBadge.title = ageMinutes === null ? "Date du rapport inconnue" : `${ageMinutes} minute(s)`;
-        ageBadge.style.cssText = `display:inline-flex;box-sizing:border-box;width:28px;height:28px;align-items:center;justify-content:center;border:1px solid ${reportIsActive ? "#63c995" : "#aeb9c4"};border-radius:50%;background:${ageColor};color:#fff;font:inherit;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 2px rgba(0,0,0,.45);`;
-        ageCell.appendChild(ageBadge);
+        ageBadge.style.cssText = `display:inline-flex;box-sizing:border-box;width:22px;height:22px;align-items:center;justify-content:center;border:1px solid ${reportIsActive ? "#63c995" : "#aeb9c4"};border-radius:50%;background:${ageColor};color:#fff;font:8px Arial,sans-serif;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 2px rgba(0,0,0,.45);`;
+        contents.appendChild(ageBadge);
 
-        const categoryCell = addCell();
         const categoryBadge = document.createElement("span");
         const category = report.category;
         if (category === "EnnemySpy") {
           categoryBadge.textContent = "⚠";
           categoryBadge.title = "Ennemi — rapport d'espionnage ennemi";
-          categoryBadge.style.cssText = "display:inline-flex;box-sizing:border-box;width:28px;height:28px;align-items:center;justify-content:center;border:1px solid #d5b44c;border-radius:50%;background:#7d1111;color:#fff;font-size:16px;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 2px rgba(0,0,0,.45);";
+          categoryBadge.style.cssText = "display:inline-flex;box-sizing:border-box;width:22px;height:22px;align-items:center;justify-content:center;border:1px solid #d5b44c;border-radius:50%;background:#7d1111;color:#fff;font-size:13px;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 2px rgba(0,0,0,.45);";
         } else {
           const categoryNumber = category.replace("Target", "");
           const categoryColors = { Target1: "#123d75", Target2: "#d87900", Target3: "#8b0000", Target4: "#777" };
@@ -2117,50 +2275,66 @@ if (document.readyState === "loading") {
           categoryBadge.textContent = categoryNumber;
           categoryBadge.title = `${category} — ${categoryDescriptions[category] || ""}`;
           const categoryColor = categoryColors[category] || "#777";
-          categoryBadge.style.cssText = `display:inline-flex;box-sizing:border-box;width:28px;height:28px;align-items:center;justify-content:center;border:1px solid #b9c9dc;border-radius:50%;background:${categoryColor};color:#fff;font:inherit;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 2px rgba(0,0,0,.45);`;
+          categoryBadge.style.cssText = `display:inline-flex;box-sizing:border-box;width:22px;height:22px;align-items:center;justify-content:center;border:1px solid #b9c9dc;border-radius:50%;background:${categoryColor};color:#fff;font:8px Arial,sans-serif;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 2px rgba(0,0,0,.45);`;
         }
-        categoryCell.appendChild(categoryBadge);
+        contents.appendChild(categoryBadge);
 
-        const stateCell = addCell();
         if (activeMission) {
           const activeIcon = document.createElement("span");
           activeIcon.textContent = "🚀";
           activeIcon.title = `${activeMission.missionId === "6" ? "Espionnage" : "Attaque"} en cours${activeMission.returning ? " (retour)" : " (aller)"}`;
-          activeIcon.style.cssText = "display:inline-flex;width:26px;height:26px;align-items:center;justify-content:center;border:1px solid #63c995;border-radius:50%;background:#174c35;font-size:15px;box-shadow:0 1px 2px rgba(0,0,0,.45);";
-          stateCell.appendChild(activeIcon);
+          activeIcon.style.cssText = "display:inline-flex;width:22px;height:22px;align-items:center;justify-content:center;border:1px solid #63c995;border-radius:50%;background:#174c35;font-size:13px;box-shadow:0 1px 2px rgba(0,0,0,.45);";
+          contents.appendChild(activeIcon);
         } else {
           const waitingLink = document.createElement("a");
           waitingLink.href = getSpyReportNavigationUrl(report, "fleetdispatch", 1);
           waitingLink.textContent = "⏳";
           waitingLink.title = "En attente — préparer une attaque avec les vaisseaux sélectionnés";
-          waitingLink.style.cssText = "display:inline-flex;width:26px;height:26px;align-items:center;justify-content:center;border:1px solid #d6aa4d;border-radius:50%;background:#513b12;font-size:15px;text-decoration:none;box-shadow:0 1px 2px rgba(0,0,0,.45);";
+          waitingLink.style.cssText = "display:inline-flex;width:22px;height:22px;align-items:center;justify-content:center;border:1px solid #d6aa4d;border-radius:50%;background:#513b12;font-size:13px;text-decoration:none;box-shadow:0 1px 2px rgba(0,0,0,.45);";
           waitingLink.addEventListener("click", event => {
             event.preventDefault();
             window.location.href = getSpyReportNavigationUrl(report, "fleetdispatch", 1);
           });
-          stateCell.appendChild(waitingLink);
+          contents.appendChild(waitingLink);
         }
 
-        const spyCell = addCell();
         const spyLink = document.createElement("button");
         spyLink.type = "button";
         spyLink.className = "icon icon_eye";
-        spyLink.title = "Lancer l'espionnage de cette cible";
-        spyLink.style.cssText = "box-sizing:border-box;width:27px;height:27px;padding:0;border:1px solid #82aaca;border-radius:50%;background:#173451;vertical-align:middle;box-shadow:0 1px 2px rgba(0,0,0,.45);";
+        spyLink.disabled = isEnemySpy;
+        spyLink.title = isEnemySpy ? "Espionnage désactivé pour les rapports ennemis" : "Lancer l'espionnage de cette cible";
+        spyLink.setAttribute("aria-label", spyLink.title);
+        spyLink.style.cssText = "box-sizing:border-box;width:22px;height:22px;padding:0;border:1px solid #82aaca;border-radius:50%;background:#173451;vertical-align:middle;box-shadow:0 1px 2px rgba(0,0,0,.45);";
         const coordinates = String(report.coordinates || "").match(/^(\d{1,2}):(\d{1,3}):(\d{1,2})$/);
-        if (coordinates) {
+        if (!isEnemySpy && coordinates) {
           const targetType = Number(report.targetPlanetType || (report.locationType === "moon" ? 3 : 1));
           spyLink.setAttribute(
             "onclick",
             `sendShipsWithPopup(6,${coordinates[1]},${coordinates[2]},${coordinates[3]},${targetType},100); return false;`
           );
         }
-        spyCell.appendChild(spyLink);
+        if (isEnemySpy) spyLink.style.opacity = "0.35";
+        contents.appendChild(spyLink);
 
-        body.appendChild(row);
+        const deleteButton = document.createElement("button");
+        deleteButton.type = "button";
+        deleteButton.className = "icon icon_trash";
+        deleteButton.title = `Supprimer ce rapport de ${selectedSpyReportCategory}`;
+        deleteButton.setAttribute("aria-label", deleteButton.title);
+        deleteButton.style.cssText = "position:absolute;top:3px;right:3px;width:18px;height:18px;padding:0;border:1px solid #a4777c;border-radius:3px;background-color:#482126;cursor:pointer;";
+        deleteButton.addEventListener("click", event => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!window.deleteInfoComptePlusSpyReport(report.key)) {
+            showNotification("Impossible de supprimer ce rapport sauvegardé.","error","Spy reports");
+            return;
+          }
+          renderSpyReportList();
+        });
+        card.append(contents, deleteButton);
+        reportGrid.appendChild(card);
       });
-      table.appendChild(body);
-      reportList.appendChild(table);
+      reportList.appendChild(reportGrid);
     }
     reportSection.appendChild(reportList);
     const messagesContainer = document.getElementById("messages");
@@ -2185,6 +2359,40 @@ if (document.readyState === "loading") {
     spyReportViewElement = reportSection;
   }
 
+  function setSpyMessagesExpanded(messagesContainer, expanded) {
+    const messageContent = messagesContainer.closest(".messageContent");
+    const messageHolder = messageHolderForReports || messagesContainer.querySelector(".messagesHolder");
+    const elements = [messagesContainer, messageContent, messageHolder].filter(Boolean);
+
+    if (expanded) {
+      if (!spyMessagesOriginalStyles) {
+        spyMessagesOriginalStyles = elements.map(element => ({
+          element,
+          height: element.style.height,
+          maxHeight: element.style.maxHeight,
+          overflow: element.style.overflow,
+          overflowY: element.style.overflowY
+        }));
+      }
+      elements.forEach(element => {
+        element.style.height = "auto";
+        element.style.maxHeight = "none";
+        element.style.overflow = "visible";
+        element.style.overflowY = "visible";
+      });
+      return;
+    }
+
+    if (!spyMessagesOriginalStyles) return;
+    spyMessagesOriginalStyles.forEach(saved => {
+      saved.element.style.height = saved.height;
+      saved.element.style.maxHeight = saved.maxHeight;
+      saved.element.style.overflow = saved.overflow;
+      saved.element.style.overflowY = saved.overflowY;
+    });
+    spyMessagesOriginalStyles = null;
+  }
+
   window.toggleInfoComptePlusSpyReportView = function(visible) {
     const messagesContainer = document.getElementById("messages");
     if (!messagesContainer) {
@@ -2204,10 +2412,14 @@ if (document.readyState === "loading") {
           messagesContainer.appendChild(messageHolderForReports);
         }
       }
+      setSpyMessagesExpanded(messagesContainer, true);
       window.setInfoComptePlusSpyReportsVisible(true);
       renderSpyReportList();
       const reportViewMounted = Boolean(spyReportViewElement && spyReportViewElement.parentNode === messagesContainer);
-      if (!reportViewMounted) window.setInfoComptePlusSpyReportsVisible(false);
+      if (!reportViewMounted) {
+        window.setInfoComptePlusSpyReportsVisible(false);
+        setSpyMessagesExpanded(messagesContainer, false);
+      }
       return reportViewMounted;
     }
 
@@ -2224,6 +2436,7 @@ if (document.readyState === "loading") {
       messagesContainer.replaceChild(messageHolderForReports, spyReportViewElement);
       spyReportViewElement = null;
     }
+    setSpyMessagesExpanded(messagesContainer, false);
     window.setInfoComptePlusSpyReportsVisible(false);
     return true;
   };
