@@ -618,6 +618,12 @@ function initializeInfoComptePlus() {
           const ageMinutes = isNaN(reportTime) ? null : Math.max(0, Math.floor((Date.now() - reportTime) / 60000));
           const activeMission = activeMissions.get(report.coordinates);
           const displayResources = report.loot || report.resources || {};
+          const rawCounterEspionage = (report.rawData || {})["data-raw-counterespionagechance"];
+          const counterEspionageFallback = (report.attributes || {})["data-messages-filters-counterespionagechance"];
+          const parsedRawCounterEspionage = getSpyNumber(rawCounterEspionage);
+          const parsedCounterEspionage = parsedRawCounterEspionage === null
+              ? getSpyNumber(counterEspionageFallback)
+              : parsedRawCounterEspionage;
           const resourceTotal = ["metal", "crystal", "deuterium"].reduce(
               (total, key) => total + (Number(displayResources[key]) || 0),
               0
@@ -636,6 +642,9 @@ function initializeInfoComptePlus() {
               },
               forceWeight,
               forceDisplay: formatSpyForceMagnitude(forceWeight),
+              counterEspionageChance: parsedCounterEspionage === null
+                  ? null
+                  : Math.max(0, Math.min(100, parsedCounterEspionage)),
               ageMinutes,
               ageColor: getSpyReportAgeColor(ageMinutes),
               activeMission: activeMission || null
@@ -1817,10 +1826,12 @@ if (document.readyState === "loading") {
       table.appendChild(columns);
 
       const body = document.createElement("tbody");
-      visibleRows.forEach(({ report, facts, resources, resourceTotal, resourceTotalDisplay, resourceDisplay, forceWeight, forceDisplay, ageMinutes, ageColor, activeMission }) => {
+      visibleRows.forEach(({ report, facts, resources, resourceTotal, resourceTotalDisplay, resourceDisplay, forceWeight, forceDisplay, counterEspionageChance, ageMinutes, ageColor, activeMission }) => {
         const row = document.createElement("tr");
         row.title = report.rawText || "";
         row.style.borderBottom = "1px solid #444";
+        const isEnemySpy = report.category === "EnnemySpy";
+        const rawData = report.rawData || {};
 
         const addCell = () => {
           const cell = document.createElement("td");
@@ -1829,26 +1840,59 @@ if (document.readyState === "loading") {
           return cell;
         };
 
-        const coordinatesCell = addCell();
-        const coordinatesLink = document.createElement("a");
-        coordinatesLink.href = getSpyReportNavigationUrl(report, "galaxy");
-        coordinatesLink.title = "Ouvrir cette position dans la galaxie";
-        coordinatesLink.style.cssText = "display:inline-flex;align-items:center;justify-content:center;gap:2px;min-height:22px;box-sizing:border-box;padding:1px 4px;border:1px solid #53b8c2;border-radius:4px;background:#102e36;color:#f2ffff;text-decoration:none;font-size:9px;box-shadow:inset 0 0 3px rgba(83,184,194,.25);";
-        coordinatesLink.appendChild(document.createTextNode(`[${report.coordinates || "?:???:??"}]`));
-        if (report.locationType === "moon") {
-          const moonIcon = document.createElement("figure");
-          moonIcon.className = "planetIcon moon";
-          moonIcon.style.cssText = "display:inline-block;width:16px;height:16px;margin:0;vertical-align:middle;";
-          coordinatesLink.appendChild(moonIcon);
-        }
-        coordinatesLink.addEventListener("click", () => {
-          try {
-            sessionStorage.setItem(SPY_GALAXY_HIGHLIGHT_KEY, JSON.stringify({ coordinates: report.coordinates }));
-          } catch (error) {
-            console.error("Impossible de mémoriser la position à surligner.", error);
+        const addCoordinateLink = (cell, coordinatesValue, locationType, title, compact = false) => {
+          const normalizedCoordinates = normalizeSpyCoordinates(coordinatesValue);
+          const coordinatesLink = document.createElement("a");
+          coordinatesLink.href = normalizedCoordinates
+            ? getSpyReportNavigationUrl({ coordinates: normalizedCoordinates }, "galaxy")
+            : "#";
+          coordinatesLink.title = title;
+          coordinatesLink.style.cssText = `display:inline-flex;align-items:center;justify-content:center;gap:2px;min-height:26px;box-sizing:border-box;padding:3px ${compact ? 2 : 6}px;border:1px solid #527f88;border-radius:4px;background:#102e36;color:#f2ffff;text-decoration:none;font-size:${compact ? 8 : 9}px;box-shadow:inset 0 0 2px rgba(83,184,194,.18);`;
+          const coordinateLabel = normalizedCoordinates || "?:???:??";
+          coordinatesLink.appendChild(document.createTextNode(compact ? coordinateLabel : `[${coordinateLabel}]`));
+          if (locationType === "moon") {
+            const moonIcon = document.createElement("figure");
+            moonIcon.className = "planetIcon moon";
+            moonIcon.style.cssText = "display:inline-block;width:16px;height:16px;margin:0;vertical-align:middle;";
+            coordinatesLink.appendChild(moonIcon);
           }
-        });
-        coordinatesCell.appendChild(coordinatesLink);
+          coordinatesLink.addEventListener("click", event => {
+            if (!normalizedCoordinates) {
+              event.preventDefault();
+              return;
+            }
+            try {
+              sessionStorage.setItem(SPY_GALAXY_HIGHLIGHT_KEY, JSON.stringify({ coordinates: normalizedCoordinates }));
+            } catch (error) {
+              console.error("Impossible de mémoriser la position à surligner.", error);
+            }
+          });
+          cell.appendChild(coordinatesLink);
+        };
+
+        const coordinatesCell = addCell();
+        if (isEnemySpy) {
+          const sourceCoordinates = rawData["data-raw-sourceplanetcoordinates"];
+          const sourcePlayerName = rawData["data-raw-sourceplayername"] || "Ennemi inconnu";
+          const sourcePlayerId = rawData["data-raw-sourceplayerid"] || "inconnu";
+          const sourcePlanetId = rawData["data-raw-sourceplanetid"] || "inconnue";
+          const sourceLocationType = rawData["data-raw-sourceplanettype"] === "3" ? "moon" : "planet";
+          const sourceDetails = [
+            `Espionneur : ${sourcePlayerName}`,
+            `Coordonnées : ${sourceCoordinates || "inconnues"}`,
+            `Type : ${sourceLocationType === "moon" ? "Lune" : "Planète"}`,
+            `ID joueur : ${sourcePlayerId}`,
+            `ID planète : ${sourcePlanetId}`
+          ];
+          addCoordinateLink(coordinatesCell, sourceCoordinates, sourceLocationType, sourceDetails.join("\n"));
+        } else {
+          addCoordinateLink(
+            coordinatesCell,
+            report.coordinates,
+            report.locationType,
+            "Ouvrir cette position dans la galaxie"
+          );
+        }
 
         const resourcesCell = addCell();
         const resourceColors = [
@@ -1856,7 +1900,15 @@ if (document.readyState === "loading") {
           ["crystal", "#51d6ff", "Cristal"],
           ["deuterium", "#66dd66", "Deutérium"]
         ];
-        if (resourceTotal > 0) {
+        if (isEnemySpy) {
+          addCoordinateLink(
+            resourcesCell,
+            report.coordinates,
+            report.locationType,
+            `Position espionnée : ${report.coordinates || "inconnue"} (${report.locationType === "moon" ? "Lune" : "Planète"})`,
+            true
+          );
+        } else if (resourceTotal > 0) {
           const diskColors = ["#006400", "#ff00ff", "#00008b"];
           const resourceValues = resourceColors.map(([key]) => Math.max(0, Number(resources[key]) || 0));
           const metalEnd = resourceValues[0] / resourceTotal * 100;
@@ -1869,7 +1921,7 @@ if (document.readyState === "loading") {
           const resourceDisk = document.createElement("span");
           resourceDisk.setAttribute("role", "img");
           resourceDisk.setAttribute("aria-label", "Survoler pour afficher les ressources");
-          resourceDisk.style.cssText = `display:inline-block;width:24px;height:24px;border:1px solid #bbb;border-radius:50%;background:conic-gradient(${diskColors[0]} 0 ${metalEnd}%,${diskColors[1]} ${metalEnd}% ${crystalEnd}%,${diskColors[2]} ${crystalEnd}% 100%);cursor:help;`;
+          resourceDisk.style.cssText = `display:inline-block;width:24px;height:24px;border:1px solid #aeb9c4;border-radius:50%;background:conic-gradient(${diskColors[0]} 0 ${metalEnd}%,${diskColors[1]} ${metalEnd}% ${crystalEnd}%,${diskColors[2]} ${crystalEnd}% 100%);cursor:help;box-shadow:0 1px 2px rgba(0,0,0,.4);`;
 
           let diskTooltip = null;
           const positionDiskTooltip = event => {
@@ -1910,10 +1962,20 @@ if (document.readyState === "loading") {
 
         const forceCell = addCell();
         const forceBadge = document.createElement("span");
-        const hasForces = forceWeight > 0;
-        forceBadge.textContent = `${hasForces ? "⚔" : "✓"} ${forceDisplay}`;
-        forceBadge.title = `🚀 Flotte : ${facts.fleet.count} unité(s) — 🛡 Défense : ${facts.defense.count} unité(s) — poids total`;
-        forceBadge.style.cssText = `display:inline-flex;box-sizing:border-box;min-width:34px;min-height:23px;align-items:center;justify-content:center;gap:2px;padding:2px 3px;border:2px solid ${hasForces ? "#ff8a80" : "#69f0ae"};border-radius:12px;background:${hasForces ? "#7f1d1d" : "#14532d"};color:#fff;font: bold 9px Arial,sans-serif;white-space:nowrap;text-shadow:0 1px 1px rgba(0,0,0,.8);box-shadow:0 1px 3px rgba(0,0,0,.55),inset 0 0 3px rgba(255,255,255,.15);`;
+        if (isEnemySpy) {
+          const chance = counterEspionageChance;
+          const hue = chance === null ? 0 : Math.round(chance * 1.2);
+          forceBadge.textContent = chance === null ? "--" : `${chance}%`;
+          forceBadge.title = chance === null
+            ? "Chance de contre-espionnage inconnue"
+            : `Chance de contre-espionnage détectée : ${chance}%`;
+          forceBadge.style.cssText = `display:inline-flex;box-sizing:border-box;min-width:34px;min-height:23px;align-items:center;justify-content:center;padding:2px 4px;border:1px solid ${chance === null ? "#aeb9c4" : `hsl(${hue},65%,58%)`};border-radius:12px;background:${chance === null ? "#4b5563" : `hsl(${hue},72%,30%)`};color:#fff;font:bold 9px Arial,sans-serif;text-shadow:0 1px 1px rgba(0,0,0,.8);box-shadow:0 1px 2px rgba(0,0,0,.4);`;
+        } else {
+          const hasForces = forceWeight > 0;
+          forceBadge.textContent = `${hasForces ? "⚔" : "✓"} ${forceDisplay}`;
+          forceBadge.title = `🚀 Flotte : ${facts.fleet.count} unité(s) — 🛡 Défense : ${facts.defense.count} unité(s) — poids total`;
+          forceBadge.style.cssText = `display:inline-flex;box-sizing:border-box;min-width:34px;min-height:23px;align-items:center;justify-content:center;gap:2px;padding:2px 3px;border:1px solid ${hasForces ? "#d97870" : "#59c894"};border-radius:12px;background:${hasForces ? "#7f1d1d" : "#14532d"};color:#fff;font:bold 9px Arial,sans-serif;white-space:nowrap;text-shadow:0 1px 1px rgba(0,0,0,.8);box-shadow:0 1px 2px rgba(0,0,0,.4);`;
+        }
         forceCell.appendChild(forceBadge);
 
         const lootCell = addCell();
@@ -1921,7 +1983,7 @@ if (document.readyState === "loading") {
         const lootPercent = report.lootPercent;
         const lootColor = lootPercent === 100 ? "#e53935" : lootPercent === 75 ? "#ff00ff" : lootPercent === 50 ? "#007bff" : "#555";
         lootBadge.textContent = lootPercent == null ? "—" : `${lootPercent}%`;
-        lootBadge.style.cssText = `display:inline-flex;box-sizing:border-box;width:26px;height:26px;align-items:center;justify-content:center;border:2px solid #fff;border-radius:50%;background:${lootColor};color:#fff;font:inherit;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 3px rgba(0,0,0,.6);`;
+        lootBadge.style.cssText = `display:inline-flex;box-sizing:border-box;width:26px;height:26px;align-items:center;justify-content:center;border:1px solid rgba(235,242,250,.8);border-radius:50%;background:${lootColor};color:#fff;font:inherit;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 2px rgba(0,0,0,.45);`;
         lootCell.appendChild(lootBadge);
 
         const ageCell = addCell();
@@ -1929,7 +1991,7 @@ if (document.readyState === "loading") {
         ageBadge.textContent = ageMinutes === null ? "--" : ageMinutes > 60 ? ">>" : String(ageMinutes).padStart(2, "0");
         const reportIsActive = Date.parse(report.expiresAt) > Date.now();
         ageBadge.title = ageMinutes === null ? "Date du rapport inconnue" : `${ageMinutes} minute(s)`;
-        ageBadge.style.cssText = `display:inline-flex;box-sizing:border-box;width:28px;height:28px;align-items:center;justify-content:center;border:2px solid ${reportIsActive ? "#69f0ae" : "#cbd5e1"};border-radius:50%;background:${ageColor};color:#fff;font:inherit;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 3px rgba(0,0,0,.6);`;
+        ageBadge.style.cssText = `display:inline-flex;box-sizing:border-box;width:28px;height:28px;align-items:center;justify-content:center;border:1px solid ${reportIsActive ? "#63c995" : "#aeb9c4"};border-radius:50%;background:${ageColor};color:#fff;font:inherit;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 2px rgba(0,0,0,.45);`;
         ageCell.appendChild(ageBadge);
 
         const categoryCell = addCell();
@@ -1938,7 +2000,7 @@ if (document.readyState === "loading") {
         if (category === "EnnemySpy") {
           categoryBadge.textContent = "⚠";
           categoryBadge.title = "Ennemi — rapport d'espionnage ennemi";
-          categoryBadge.style.cssText = "display:inline-flex;box-sizing:border-box;width:28px;height:28px;align-items:center;justify-content:center;border:2px solid #ffd54f;border-radius:50%;background:#7d1111;color:#fff;font-size:16px;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 3px rgba(0,0,0,.6);";
+          categoryBadge.style.cssText = "display:inline-flex;box-sizing:border-box;width:28px;height:28px;align-items:center;justify-content:center;border:1px solid #d5b44c;border-radius:50%;background:#7d1111;color:#fff;font-size:16px;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 2px rgba(0,0,0,.45);";
         } else {
           const categoryNumber = category.replace("Target", "");
           const categoryColors = { Target1: "#123d75", Target2: "#d87900", Target3: "#8b0000", Target4: "#777" };
@@ -1951,7 +2013,7 @@ if (document.readyState === "loading") {
           categoryBadge.textContent = categoryNumber;
           categoryBadge.title = `${category} — ${categoryDescriptions[category] || ""}`;
           const categoryColor = categoryColors[category] || "#777";
-          categoryBadge.style.cssText = `display:inline-flex;box-sizing:border-box;width:28px;height:28px;align-items:center;justify-content:center;border:2px solid #dbeafe;border-radius:50%;background:${categoryColor};color:#fff;font:inherit;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 3px rgba(0,0,0,.6);`;
+          categoryBadge.style.cssText = `display:inline-flex;box-sizing:border-box;width:28px;height:28px;align-items:center;justify-content:center;border:1px solid #b9c9dc;border-radius:50%;background:${categoryColor};color:#fff;font:inherit;font-weight:bold;text-shadow:0 1px 2px #000;box-shadow:0 1px 2px rgba(0,0,0,.45);`;
         }
         categoryCell.appendChild(categoryBadge);
 
@@ -1960,14 +2022,14 @@ if (document.readyState === "loading") {
           const activeIcon = document.createElement("span");
           activeIcon.textContent = "🚀";
           activeIcon.title = `${activeMission.missionId === "6" ? "Espionnage" : "Attaque"} en cours${activeMission.returning ? " (retour)" : " (aller)"}`;
-          activeIcon.style.cssText = "display:inline-flex;width:26px;height:26px;align-items:center;justify-content:center;border:1px solid #69f0ae;border-radius:50%;background:#174c35;font-size:15px;box-shadow:0 1px 3px rgba(0,0,0,.6);";
+          activeIcon.style.cssText = "display:inline-flex;width:26px;height:26px;align-items:center;justify-content:center;border:1px solid #63c995;border-radius:50%;background:#174c35;font-size:15px;box-shadow:0 1px 2px rgba(0,0,0,.45);";
           stateCell.appendChild(activeIcon);
         } else {
           const waitingLink = document.createElement("a");
           waitingLink.href = getSpyReportNavigationUrl(report, "fleetdispatch", 1);
           waitingLink.textContent = "⏳";
           waitingLink.title = "En attente — préparer une attaque avec les vaisseaux sélectionnés";
-          waitingLink.style.cssText = "display:inline-flex;width:26px;height:26px;align-items:center;justify-content:center;border:1px solid #fbbf24;border-radius:50%;background:#513b12;font-size:15px;text-decoration:none;box-shadow:0 1px 3px rgba(0,0,0,.6);";
+          waitingLink.style.cssText = "display:inline-flex;width:26px;height:26px;align-items:center;justify-content:center;border:1px solid #d6aa4d;border-radius:50%;background:#513b12;font-size:15px;text-decoration:none;box-shadow:0 1px 2px rgba(0,0,0,.45);";
           waitingLink.addEventListener("click", event => {
             event.preventDefault();
             window.location.href = getSpyReportNavigationUrl(report, "fleetdispatch", 1);
@@ -1980,7 +2042,7 @@ if (document.readyState === "loading") {
         spyLink.type = "button";
         spyLink.className = "icon icon_eye";
         spyLink.title = "Lancer l'espionnage de cette cible";
-        spyLink.style.cssText = "box-sizing:border-box;width:27px;height:27px;padding:0;border:2px solid #93c5fd;border-radius:50%;background:#173451;vertical-align:middle;box-shadow:0 1px 3px rgba(0,0,0,.65);";
+        spyLink.style.cssText = "box-sizing:border-box;width:27px;height:27px;padding:0;border:1px solid #82aaca;border-radius:50%;background:#173451;vertical-align:middle;box-shadow:0 1px 2px rgba(0,0,0,.45);";
         const coordinates = String(report.coordinates || "").match(/^(\d{1,2}):(\d{1,3}):(\d{1,2})$/);
         if (coordinates) {
           const targetType = Number(report.targetPlanetType || (report.locationType === "moon" ? 3 : 1));
