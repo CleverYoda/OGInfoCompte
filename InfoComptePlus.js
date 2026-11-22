@@ -217,6 +217,7 @@ function initializeInfoComptePlus() {
 
   const SPY_REPORT_STORAGE_KEY = "cAdditionalSpyReports";
   let spyReportsVisible = false;
+  let spyReportProcessing = false;
   const SPY_REPORT_CATEGORY_NAMES = ["EnnemySpy", "Target1", "Target2", "Target3", "Target4"];
   const SPY_REPORT_RESOURCE_THRESHOLD = 1500000;
 
@@ -443,7 +444,8 @@ function initializeInfoComptePlus() {
       const nowMs = now.getTime();
       let added = 0;
       let updated = 0;
-      const messages = document.querySelectorAll("div.messagesHolder div.msg");
+      const scannedSpyMessages = [];
+      const messages = document.querySelectorAll("#messages div.messagesHolder div.msg");
 
       messages.forEach((message, index) => {
           const rawText = (message.innerText || message.textContent || "").trim();
@@ -536,6 +538,7 @@ function initializeInfoComptePlus() {
               store.reports[existingIndex] = reportData;
               updated++;
           }
+          scannedSpyMessages.push({ message, key });
       });
 
       updateSpyReportCategories(store);
@@ -548,8 +551,33 @@ function initializeInfoComptePlus() {
           return null;
       }
 
+      let persistedStore;
+      try {
+          persistedStore = JSON.parse(localStorage.getItem(SPY_REPORT_STORAGE_KEY) || "null");
+      } catch (error) {
+          console.error("Impossible de vérifier les rapports sauvegardés.", error);
+          showNotification("La sauvegarde des rapports n'a pas pu être vérifiée ; aucun message ne sera supprimé.","error","Spy reports");
+          return null;
+      }
+      const persistedKeys = new Set(
+          persistedStore && Array.isArray(persistedStore.reports)
+              ? persistedStore.reports.map(report => report.key)
+              : []
+      );
+      const messagesToDelete = scannedSpyMessages
+          .filter(candidate => persistedKeys.has(candidate.key))
+          .map(candidate => candidate.message);
+      if (messagesToDelete.length !== scannedSpyMessages.length) {
+          console.error("Certains rapports d'espionnage n'ont pas été retrouvés dans la sauvegarde.", {
+              scanned: scannedSpyMessages.length,
+              persisted: messagesToDelete.length
+          });
+          showNotification("La sauvegarde de tous les rapports n'a pas pu être confirmée ; aucun message ne sera supprimé.","error","Spy reports");
+          return null;
+      }
+
       showNotification(`${added} nouveau(x) rapport(s), ${updated} actualisé(s).`,"info","Spy reports");
-      return store;
+      return { store, messagesToDelete };
   }
 
   function formatSpyMagnitude(value) {
@@ -654,9 +682,86 @@ function initializeInfoComptePlus() {
 
   function toggleSpyReportList() {
       if (currentPage !== "messages") return;
-      spyReportsVisible = true;
-      detailsVisible = true;
-      refreshFleetDisplay(true, true);
+      if (typeof window.toggleInfoComptePlusSpyReportView !== "function") {
+          showNotification("L'affichage des rapports n'est pas disponible.","error","Spy reports");
+          return;
+      }
+      window.toggleInfoComptePlusSpyReportView(!spyReportsVisible);
+  }
+
+  function getSpyMessageDeleteButton(message) {
+      const messageId = message.getAttribute("data-msg-id");
+      if (messageId) {
+          const spyTableTrash = Array.from(document.querySelectorAll("button.icon.icon_trash[data-id]"))
+              .find(button => button.getAttribute("data-id") === messageId);
+          if (spyTableTrash) return spyTableTrash;
+      }
+      return message.querySelector("button.msgDeleteBtn[data-message-id], button.msgDeleteBtn");
+  }
+
+  async function processSpyReports() {
+      if (currentPage !== "messages" || spyReportProcessing) return;
+      spyReportProcessing = true;
+
+      try {
+          if (typeof window.toggleInfoComptePlusSpyReportView !== "function"
+              || !window.toggleInfoComptePlusSpyReportView(false)) {
+              return;
+          }
+          if (!document.querySelector("#messages div.messagesHolder")) {
+              showNotification("Conteneur messagesHolder introuvable ; aucun rapport n'a été traité.","error","Spy reports");
+              return;
+          }
+          const scanResult = scanSpyReports();
+          if (!scanResult) return;
+
+          const deleteTargets = scanResult.messagesToDelete.map(message => ({
+              message,
+              button: getSpyMessageDeleteButton(message)
+          }));
+          const missingButtons = deleteTargets.filter(target => !target.button);
+          if (missingButtons.length > 0) {
+              console.error("Bouton de suppression introuvable pour certains rapports sauvegardés.", {
+                  messageIds: missingButtons.map(({ message }) => message.getAttribute("data-msg-id"))
+              });
+              showNotification(`${missingButtons.length} rapport(s) sauvegardé(s) sans bouton de suppression ; aucun message ne sera supprimé.`,"error","Spy reports");
+              return;
+          }
+
+          if (deleteTargets.length > 0) {
+              showNotification(`Suppression progressive de ${deleteTargets.length} rapport(s) sauvegardé(s)...`,"info","Spy reports");
+          }
+          for (let index = 0; index < deleteTargets.length; index++) {
+              const target = deleteTargets[index];
+              const deleteButton = getSpyMessageDeleteButton(target.message);
+              if (!deleteButton || !deleteButton.isConnected) {
+                  if (target.message.isConnected) {
+                      throw new Error(`Le bouton de suppression du message ${target.message.getAttribute("data-msg-id")} n'est plus disponible.`);
+                  }
+              } else {
+                  deleteButton.click();
+              }
+              await new Promise(resolve => setTimeout(resolve, 800 + Math.floor(Math.random() * 501)));
+          }
+
+          const remainingMessages = deleteTargets.filter(({ message }) => message.isConnected);
+          if (remainingMessages.length > 0) {
+              showNotification(`${remainingMessages.length} rapport(s) restent dans la boîte ; la liste n'a pas été affichée.`,"error","Spy reports");
+              return;
+          }
+
+          if (typeof window.toggleInfoComptePlusSpyReportView !== "function"
+              || !window.toggleInfoComptePlusSpyReportView(true)) {
+              showNotification("Les rapports sont sauvegardés, mais leur affichage dans les messages a échoué.","error","Spy reports");
+              return;
+          }
+          showNotification(`${deleteTargets.length} rapport(s) supprimé(s) après sauvegarde. Appuyez sur T pour revenir aux messages.`,"success","Spy reports");
+      } catch (error) {
+          console.error("Échec du traitement des rapports d'espionnage.", error);
+          showNotification("Le traitement des rapports d'espionnage a été interrompu. Consultez la console pour le détail.","error","Spy reports");
+      } finally {
+          spyReportProcessing = false;
+      }
   }
 
   window.getInfoComptePlusSpyReportState = function() {
@@ -665,6 +770,9 @@ function initializeInfoComptePlus() {
           visible: spyReportsVisible,
           rows: store ? getSpyReportDisplayRows(store) : []
       };
+  };
+  window.setInfoComptePlusSpyReportsVisible = function(visible) {
+      spyReportsVisible = Boolean(visible);
   };
 
   window.getInfoComptePlusFleetSelection = function(report) {
@@ -1022,7 +1130,7 @@ function initializeInfoComptePlus() {
                 break;
             case 78: //n
                 if (currentPage=="messages") {
-                    scanSpyReports();
+                    processSpyReports();
                 }
                 break;
             case 86: //v
@@ -1421,7 +1529,8 @@ if (document.readyState === "loading") {
   let idleTimer = null;
   let detailsVisible = true;
   let lastFleetRefresh = null;
-  let cachedSpyReportList = null;
+  let messageHolderForReports = null;
+  let spyReportViewElement = null;
   let activeResourcesTooltip = null;
   const SPY_REPORT_TAB_CATEGORIES = ["EnnemySpy", "Target1", "Target2", "Target3", "Target4"];
   const SPY_REPORT_SELECTED_CATEGORY_KEY = "cAdditionalSpyReportSelectedCategory";
@@ -1715,7 +1824,7 @@ if (document.readyState === "loading") {
   highlightPendingSpyPosition();
 
   // Affichage du détail des missions
-  function renderFleetDetails(stats, refreshSpyReports = false) {
+  function renderFleetDetails(stats) {
     fleetDetails.innerHTML = "";
 
     Object.entries(stats.missions)
@@ -1745,11 +1854,6 @@ if (document.readyState === "loading") {
     updateLine.textContent = `MAJ : ${lastFleetRefresh ? formatTimestamp(lastFleetRefresh) : "--"}`;
     fleetDetails.appendChild(updateLine);
 
-    if (refreshSpyReports) {
-      renderSpyReportList();
-    } else if (cachedSpyReportList) {
-      fleetDetails.appendChild(cachedSpyReportList);
-    }
   }
 
   function renderSpyReportList() {
@@ -1763,11 +1867,11 @@ if (document.readyState === "loading") {
       activeResourcesTooltip = null;
     }
 
-    panel.style.width = "360px";
     const reportSection = document.createElement("div");
+    reportSection.style.cssText = "width:100%;box-sizing:border-box;padding:8px;color:#f2f2f2;";
     const title = document.createElement("div");
-    title.textContent = `Rapports d'espionnage (${spyReportState.rows.length})`;
-    title.style.cssText = "margin-top:5px;padding-top:4px;border-top:1px solid #444;font-weight:bold;";
+    title.textContent = `Rapports d'espionnage (${spyReportState.rows.length}) — T : messages`;
+    title.style.cssText = "margin-bottom:8px;padding:6px;border-bottom:1px solid #52616f;font-weight:bold;";
     reportSection.appendChild(title);
 
     const categoryCounts = {};
@@ -2059,16 +2163,73 @@ if (document.readyState === "loading") {
       reportList.appendChild(table);
     }
     reportSection.appendChild(reportList);
-    if (cachedSpyReportList && cachedSpyReportList.parentNode) {
-      cachedSpyReportList.parentNode.replaceChild(reportSection, cachedSpyReportList);
-    } else {
-      fleetDetails.appendChild(reportSection);
+    const messagesContainer = document.getElementById("messages");
+    if (!messagesContainer) {
+      console.error("Conteneur #messages introuvable pour afficher les rapports d'espionnage.");
+      showNotification("Impossible d'afficher les rapports : conteneur des messages introuvable.","error","Spy reports");
+      return;
     }
-    cachedSpyReportList = reportSection;
+    if (spyReportViewElement && spyReportViewElement.parentNode === messagesContainer) {
+      messagesContainer.replaceChild(reportSection, spyReportViewElement);
+    } else {
+      if (!messageHolderForReports || messageHolderForReports.parentNode !== messagesContainer) {
+        messageHolderForReports = messagesContainer.querySelector(".messagesHolder");
+      }
+      if (!messageHolderForReports || messageHolderForReports.parentNode !== messagesContainer) {
+        console.error("Conteneur messagesHolder introuvable pour afficher les rapports d'espionnage.");
+        showNotification("Impossible d'afficher les rapports : messagesHolder introuvable.","error","Spy reports");
+        return;
+      }
+      messagesContainer.replaceChild(reportSection, messageHolderForReports);
+    }
+    spyReportViewElement = reportSection;
   }
 
+  window.toggleInfoComptePlusSpyReportView = function(visible) {
+    const messagesContainer = document.getElementById("messages");
+    if (!messagesContainer) {
+      console.error("Conteneur #messages introuvable.");
+      showNotification("Impossible d'accéder au conteneur des messages.","error","Spy reports");
+      return false;
+    }
+
+    if (visible) {
+      if (!spyReportViewElement || spyReportViewElement.parentNode !== messagesContainer) {
+        const currentMessagesHolder = messagesContainer.querySelector(".messagesHolder");
+        if (currentMessagesHolder) {
+          messageHolderForReports = currentMessagesHolder;
+        } else if (!messageHolderForReports || messageHolderForReports.parentNode !== messagesContainer) {
+          messageHolderForReports = document.createElement("div");
+          messageHolderForReports.className = "messagesHolder";
+          messagesContainer.appendChild(messageHolderForReports);
+        }
+      }
+      window.setInfoComptePlusSpyReportsVisible(true);
+      renderSpyReportList();
+      const reportViewMounted = Boolean(spyReportViewElement && spyReportViewElement.parentNode === messagesContainer);
+      if (!reportViewMounted) window.setInfoComptePlusSpyReportsVisible(false);
+      return reportViewMounted;
+    }
+
+    if (activeResourcesTooltip) {
+      activeResourcesTooltip.remove();
+      activeResourcesTooltip = null;
+    }
+    if (spyReportViewElement && spyReportViewElement.parentNode === messagesContainer) {
+      if (!messageHolderForReports) {
+        console.error("Le conteneur messagesHolder d'origine est introuvable.");
+        showNotification("Impossible de revenir aux messages d'origine.","error","Spy reports");
+        return false;
+      }
+      messagesContainer.replaceChild(messageHolderForReports, spyReportViewElement);
+      spyReportViewElement = null;
+    }
+    window.setInfoComptePlusSpyReportsVisible(false);
+    return true;
+  };
+
   // Actualisation de la partie flotte
-  function refreshFleetDisplay(force = false, refreshSpyReports = false) {
+  function refreshFleetDisplay(force = false) {
     // Actualisation uniquement en mode OK
     if ((!enabled || pending > 0) && !force) return;
 
@@ -2080,7 +2241,7 @@ if (document.readyState === "loading") {
     fleetButton.textContent =
       `Flottes Actives (${stats.active}/${stats.returning}) ${detailsVisible ? "▲" : "▼"}`;
 
-    renderFleetDetails(stats, refreshSpyReports);
+    renderFleetDetails(stats);
 
     fleetButton.style.display = "block";
 
